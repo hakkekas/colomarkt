@@ -24,6 +24,14 @@ else
   echo "Geef een zip mee, bv.: sudo ./update.sh colomarkt-server.zip"; exit 1
 fi
 
+# Nieuw sinds de beheersmodule: een beheerwachtwoord, als het er nog niet is.
+if ! grep -qE '^BEHEER_WACHTWOORD=.+' /etc/colomarkt.env; then
+  BEHEER="$(node -e "console.log(require('crypto').randomBytes(12).toString('base64url'))")"
+  sed -i '/^BEHEER_WACHTWOORD=/d' /etc/colomarkt.env
+  printf '\n# Wachtwoord van de systeembeheerder (beheersmodule in de app).\nBEHEER_WACHTWOORD=%s\n' "$BEHEER" >> /etc/colomarkt.env
+  echo "Wachtwoord van de systeembeheerder: $BEHEER  (staat in /etc/colomarkt.env; wijzigen kan in de app, bij Beheer)"
+fi
+
 systemctl restart colomarkt
 sleep 2
 POORT="$(grep -E '^POORT=' /etc/colomarkt.env | cut -d= -f2)"

@@ -461,7 +461,8 @@ a.btn.small{padding:5px 10px; font-size:12.5px;}
 .plan-meta{font-size:12.5px; color:var(--ink-soft);}
 .plan-acties{display:flex; align-items:center; gap:6px; justify-content:space-between;}
 .plan-leeg{font-size:12.5px; color:var(--ink-soft); padding:6px 0;}
-.plan-behoefte{margin-top:12px;} .plan-behoefte summary{cursor:pointer; font-weight:600; font-size:13.5px;}
+.plan-behoefte{margin-top:12px;}
+.plan-weekkop{font-family:Nunito,system-ui,sans-serif; font-size:15px; margin:18px 0 8px;} .plan-behoefte summary{cursor:pointer; font-weight:600; font-size:13.5px;}
 .plan-raster td.plan-cel{font-size:12.5px; vertical-align:top;} .plan-raster td.leeg{color:var(--ink-soft);}
 .plan-raster .plan-nu{background:var(--brand-tint);}
 @media (max-width:900px){ .plan-week{grid-template-columns:1fr;} .plan-dag.voorbij{display:none;} }
@@ -674,6 +675,26 @@ dialog{border-radius:16px;}
 <div id="printArea"></div>
 
 <script>
+/* ---------- Catalogusbestanden: geladen uit de assetopslag van deze artifact ---------- */
+// Vul CAT_ASSETS met de /_blob/-adressen na het uploaden. Lege catalogi staan hieronder inline.
+const CAT_ASSETS = {"catalogus/horecatotaal.json":"/_blob/ac5f8556e11235628b4ea16ca91239e1","catalogus/solucious.json":"/_blob/f614612b95ac304d6233834cf5d71df6","catalogus/sol-fotos.json":"/_blob/4588f65fd223712a9fb5193b18abe817","ht-fotos-1":"/_blob/efd52ab6f83b5818d1192a3ee0929b36","ht-fotos-2":"/_blob/6ca4afb33f30cc6ff7831b7f33151de8","ht-fotos-3":"/_blob/93a5c7d1fe2ed64dc632b01fd2327fea","ht-fotos-4":"/_blob/d3c6ff4b7d0fe093b641fd3eaab9e613"};
+const CAT_INLINE = {"catalogus/delidis.json":{"bron":"Delidis webshop (mijn.delidis.be)","opgehaald":"","volledig":false,"klant":"","producten":[]},"catalogus/verbiest.json":{"bron":"Verbiest webshop (shop.fcig.be)","opgehaald":"","volledig":false,"klant":"","producten":[]},"catalogus/del-fotos.json":{},"catalogus/vb-fotos.json":{}};
+const CAT_FOTOBUNDEL = {"0":1,"1":1,"2":1,"3":1,"4":1,"5":1,"6":1,"7":1,"8":1,"9":1,"10":1,"11":1,"12":1,"13":2,"14":2,"15":2,"16":2,"17":2,"18":2,"19":2,"20":2,"21":2,"22":2,"23":3,"24":3,"25":3,"26":3,"27":3,"28":3,"29":3,"30":3,"31":3,"32":3,"33":3,"34":3,"35":3,"36":3,"37":3,"38":3,"39":4,"40":4,"41":4,"42":4,"43":4,"44":4,"45":4,"46":4,"47":4,"48":4,"49":4,"50":4,"51":4};
+const _catBundels = {};
+function catJsonResponse(obj){ return new Response(JSON.stringify(obj), {status:200, headers:{'Content-Type':'application/json'}}); }
+function catFetch(path){
+  if(CAT_INLINE[path]) return Promise.resolve(catJsonResponse(CAT_INLINE[path]));
+  const m = /^catalogus\/foto-(\d+)\.json$/.exec(path);
+  if(m){
+    const b = CAT_FOTOBUNDEL[m[1]];
+    if(!b) return Promise.resolve(catJsonResponse({}));
+    const key = 'ht-fotos-'+b;
+    if(!_catBundels[key]) _catBundels[key] = fetch(CAT_ASSETS[key]).then(r=>r.ok?r.json():{}).catch(()=>{ delete _catBundels[key]; return {}; });
+    return _catBundels[key].then(bundel=>catJsonResponse(bundel[m[1]]||{}));
+  }
+  return fetch(CAT_ASSETS[path] || path);
+}
+
 
 /* ---------- Op je gsm zetten ---------- */
 const APP_LINK = 'https://claude.ai/artifact/SfX3dNATYpXThaNCsnhDLt';
@@ -733,6 +754,7 @@ function seedUsers(){
     {id:'kelder', naam:'Keldermeester', rol:'keldermeester'},
     {id:'boekhouding', naam:'TA Horeca', rol:'boekhouding'},
     {id:'ta-bakkerij', naam:'TA Bakkerij', rol:'boekhouding', afdeling:'bakkerij'},
+    {id:'beheerder', naam:'Systeembeheerder', rol:'beheerder'},
   ];
 }
 
@@ -917,6 +939,8 @@ try{
   ['leveringen','facturen','kassaVerkoop'].forEach(k=>{ if(!Array.isArray(state[k])) state[k] = []; });
   if(!state.budgetten) state.budgetten = {};
   if(!state.users || !state.users.length) state.users = seedUsers();
+  // Hans 2026-10-22: systeembeheerder met de beheersmodule (gebruikers, toegang, back-ups, systeem).
+  if(!state._beheerV1){ if(!state.users.some(u=>u.rol==='beheerder')) state.users.push({id:'beheerder', naam:'Systeembeheerder', rol:'beheerder'}); state._beheerV1 = true; }
   if(!Array.isArray(state.keukens)) state.keukens = keukenStandaard();
   haccpBakkerijMigratie();
   if(!state.tekorten) state.tekorten = [];
@@ -1536,11 +1560,12 @@ function categoryForTab(tabId){
   return c ? c.id : CATS[0].id;
 }
 function tabsFor(user){
+  if(user.rol==='beheerder') return [['bhGebruikers','Gebruikers'], ['bhToegang','Toegang & toestellen'], ['bhBackup','Back-ups'], ['bhSysteem','Systeem'], ['historiek','Historiek']];
   if(user.rol==='magazijn'){
     return [
       ['vandaag','Vandaag klaarzetten'+badge(state.orders.filter(o=>['ingediend','verwerkt'].includes(orderFase(o))).length + bijnaVervallen().length)],
       ['haccpdag','HACCP-dagtaken'+badge(hdBadge())],
-      ['week','Weekplanning'+badge(planInWeek(planWeek(), p=>!p.orderId && p.datum>=isoDag(new Date())).length)],
+      ['week','Weekplanning'+badge(planInPeriode(planWeek(), p=>!p.orderId && p.datum>=isoDag(new Date())).length)],
       ['dashboard','Cijfers & back-up'],
       ['bestellingen','Bestellingen'+badge(pendingOrderCount())],
       ['kelderbest','Kelderbestellingen'+badge((state.kelderBestellingen||[]).filter(b=>b.status==='ingediend').length)],
@@ -1657,12 +1682,13 @@ function renderLogin(){
   const el = document.getElementById('login');
   const kop = `<div class="lg-kop"><svg class="drie drie-top" viewBox="0 0 400 80" preserveAspectRatio="none" aria-hidden="true"><polygon points="0,0 125,0 45,62 0,40" style="fill:var(--c-blauw)"/><polygon points="125,0 255,0 185,34" style="fill:var(--c-geel)"/><polygon points="255,0 400,0 400,30 335,62 185,34" style="fill:var(--brand)"/><polygon points="400,30 400,80 335,62" style="fill:var(--c-paars)"/></svg><div class="lg-tekst"><h1>Colomarkt+</h1><p>Coloma · Huis van de Gastronomie — wie ben je?</p></div><svg class="drie drie-bot" viewBox="0 0 400 50" preserveAspectRatio="none" aria-hidden="true"><polygon points="0,50 0,30 95,0 215,50" style="fill:var(--c-lime)"/><polygon points="215,50 262,32 300,50" style="fill:var(--c-paars)"/><polygon points="262,32 400,0 400,50 300,50" style="fill:var(--c-oranje)"/></svg></div>`;
   if(_lg.stap==='kies'){
-    const groepen = [['keuken','Keuken / Chefs'],['bakkerij','Bakkerij / Bakker'],['zaal','Zaal / maître'],['magazijn','Magazijn'],['keldermeester','Kelder'],['ta-horeca','TA Horeca'],['ta-bakkerij','TA Bakkerij']];
+    const groepen = [['keuken','Keuken / Chefs'],['bakkerij','Bakkerij / Bakker'],['zaal','Zaal / maître'],['magazijn','Magazijn'],['keldermeester','Kelder'],['ta-horeca','TA Horeca'],['ta-bakkerij','TA Bakkerij'],['beheerder','Beheer']];
     el.innerHTML = kop + `<div class="lg-body">${groepen.map(([rol,label])=>{ const us = state.users.filter(u=>gebruikerGroep(u)===rol);
       return us.length ? `<div class="lg-groep">${label}</div><div class="lg-namen">${us.map(u=>`<button class="lg-naam" onclick="kiesGebruiker('${u.id}')">${esc(u.naam)}</button>`).join('')}</div>` : ''; }).join('')}</div>`;
     return;
   }
   const u = state.users.find(x=>x.id===_lg.uid);
+  if(_lg.stap==='wachtwoord'){ el.innerHTML = kop + `<div class="lg-body">${bhLoginHtml(u)}</div>`; return; }
   const titel = _lg.stap==='nieuw' ? 'Kies een pincode van 4 cijfers' : _lg.stap==='herhaal' ? 'Typ je nieuwe pincode nog eens' : 'Typ je pincode';
   el.innerHTML = kop + `<div class="lg-body"><div class="lg-pin">
     <h2 style="font-size:19px;">${esc(u.naam)}</h2>
@@ -1675,8 +1701,9 @@ function renderLogin(){
 function kiesGebruiker(uid){
   if(!uid){ _lg = {uid:null, pin:'', stap:'kies', eerste:'', fout:''}; renderLogin(); return; }
   const u = state.users.find(x=>x.id===uid);
-  _lg = {uid, pin:'', stap: u.pinHash ? 'pin' : 'nieuw', eerste:'', fout:''};
+  _lg = {uid, pin:'', stap: isBeheerder(u) && opServer() ? 'wachtwoord' : u.pinHash ? 'pin' : 'nieuw', eerste:'', fout:''};
   renderLogin();
+  if(_lg.stap==='wachtwoord') setTimeout(()=>{ const n=document.getElementById('bhLoginPw'); if(n) n.focus(); }, 30);
 }
 async function pinToets(k){
   if(k==='del'){ _lg.pin = _lg.pin.slice(0,-1); renderLogin(); return; }
@@ -1703,12 +1730,16 @@ function aanmelden(uid){
   renderShell();
 }
 document.addEventListener('keydown', e=>{
-  const el = document.getElementById('login'); if(!el || el.hidden || !_lg.uid) return;
+  const el = document.getElementById('login'); if(!el || el.hidden || !_lg.uid || _lg.stap==='wachtwoord') return;
   if(/^[0-9]$/.test(e.key)) pinToets(e.key); else if(e.key==='Backspace') pinToets('del'); else if(e.key==='Escape') kiesGebruiker(null);
 });
-function afmelden(){ sessieZet(null); cart={}; toonLogin(); }
+function afmelden(){
+  if(isBeheerder(currentUser()) && opServer()){ fetch('/api/beheer/afmelden', {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body:'{}'}).catch(()=>{}); window._bh = {aangemeld:null, info:null, toestellen:null, backups:null, log:null, bezig:{}, fout:''}; }
+  sessieZet(null); cart={}; toonLogin();
+}
 function wisPin(uid){
-  const u = state.users.find(x=>x.id===uid); if(!u || !confirm(`Pincode van ${u.naam} wissen? Bij de volgende keer aanmelden kiest ${u.naam} een nieuwe.`)) return;
+  const u = state.users.find(x=>x.id===uid); if(u && isBeheerder(u) && !isBeheerder(currentUser())){ toast('De pincode van een systeembeheerder wist alleen een systeembeheerder.'); return; }
+  if(!u || !confirm(`Pincode van ${u.naam} wissen? Bij de volgende keer aanmelden kiest ${u.naam} een nieuwe.`)) return;
   delete u.pinHash; state.activity.push({tijd:nowStr(), tekst:`Pincode van ${u.naam} gewist door ${currentUser().naam}.`}); save(); renderMain();
 }
 function renderShell(){
@@ -1752,7 +1783,9 @@ function switchTab(id){ if(id!==activeTab){ window._hdKeuken=null; window._hdDag
 function renderMain(){
   const user = currentUser();
   const main = document.getElementById('main');
-  if(user.rol==='magazijn'){
+  if(user.rol==='beheerder'){
+    main.innerHTML = activeTab==='bhToegang' ? viewBhToegang() : activeTab==='bhBackup' ? viewBhBackup() : activeTab==='bhSysteem' ? viewBhSysteem() : activeTab==='historiek' ? viewHistoriek() : viewBhGebruikers();
+  } else if(user.rol==='magazijn'){
     if(activeTab==='vandaag') main.innerHTML = viewVandaag();
     else if(activeTab==='week') main.innerHTML = viewWeekMagazijn();
     else if(activeTab==='haccpdag') main.innerHTML = viewHaccpDag();
@@ -3351,6 +3384,15 @@ function weekDagen(maandagIso){ const m = new Date(maandagIso+'T12:00:00'); retu
 function planVerschuif(n){ const m = new Date(planWeek()+'T12:00:00'); m.setDate(m.getDate()+7*n); window._planWeek = isoDag(m); renderMain(); }
 function planDezeWeek(){ window._planWeek = standaardWeek(); renderMain(); }
 function weekTitel(maandagIso){ const d = weekDagen(maandagIso); const f = x=>new Date(x+'T12:00:00').toLocaleDateString('nl-BE',{day:'numeric',month:'short'}); return 'Week van '+f(d[0].iso)+' tot '+f(d[4].iso); }
+// Periode: standaard deze week plus een maand vooruit (5 weken); terug te zetten naar één week.
+const PLAN_MAAND_WEKEN = 5;
+function planWeken(){ return window._planWeken || PLAN_MAAND_WEKEN; }
+function planModus(n){ window._planWeken = n; renderMain(); }
+function periodeMaandagen(maandagIso){ const out = []; for(let i=0;i<planWeken();i++){ const d = new Date(maandagIso+'T12:00:00'); d.setDate(d.getDate()+7*i); out.push(isoDag(d)); } return out; }
+function periodeDagen(maandagIso){ return periodeMaandagen(maandagIso).flatMap(weekDagen); }
+function planInPeriode(maandagIso, filter){ const d = periodeDagen(maandagIso); const van = d[0].iso, tot = d[d.length-1].iso; return (state.planning||[]).filter(p=>p.datum>=van && p.datum<=tot && (!filter || filter(p))); }
+function periodeTitel(maandagIso){ if(planWeken()===1) return weekTitel(maandagIso); const d = periodeDagen(maandagIso); const f = x=>new Date(x+'T12:00:00').toLocaleDateString('nl-BE',{day:'numeric',month:'short'}); return 'Van '+f(d[0].iso)+' tot '+f(d[d.length-1].iso)+' ('+planWeken()+' weken)'; }
+function planModusKnoppen(){ const m = planWeken()>1; return `<button class="btn ${m?'ghost ':''}small" onclick="planModus(1)" aria-pressed="${!m}">1 week</button><button class="btn ${m?'':'ghost '}small" onclick="planModus(${PLAN_MAAND_WEKEN})" aria-pressed="${m}">+1 maand</button>`; }
 function planInWeek(maandagIso, filter){ const d = weekDagen(maandagIso); const van = d[0].iso, tot = d[4].iso; return (state.planning||[]).filter(p=>p.datum>=van && p.datum<=tot && (!filter || filter(p))); }
 
 // Producten die een geplande les nodig heeft (zelfde omrekening als "Per recept").
@@ -3373,8 +3415,8 @@ function planStatusTag(p){
 
 function viewWeekplanning(){
   const me = currentUser();
-  const week = planWeek(), dagen = weekDagen(week), vandaag = isoDag(new Date());
-  const mijn = planInWeek(week, p=>p.leerkrachtId===me.id);
+  const week = planWeek(), dagen = periodeDagen(week), vandaag = isoDag(new Date());
+  const mijn = planInPeriode(week, p=>p.leerkrachtId===me.id);
   const open = mijn.filter(p=>!p.orderId && p.datum>=vandaag);
   const q = (window._planQ||'').toLowerCase();
   const recepten = state.recipes.filter(r=>r.status==='goedgekeurd' && zieRecept(r));
@@ -3386,13 +3428,14 @@ function viewWeekplanning(){
   return `<div class="panel">
     <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap;">
       <h2 style="margin:0;">Mijn weekplanning</h2>
-      <div class="row" style="gap:6px;">
+      <div class="row" style="gap:6px;flex-wrap:wrap;">
+        ${planModusKnoppen()}
         <button class="btn ghost small" onclick="planVerschuif(-1)" aria-label="Vorige week">‹</button>
         <button class="btn ghost small" onclick="planDezeWeek()">Deze week</button>
         <button class="btn ghost small" onclick="planVerschuif(1)" aria-label="Volgende week">›</button>
       </div>
     </div>
-    <p class="note" style="margin:6px 0 0;">${weekTitel(week)}. Plan per les welk recept je maakt en voor hoeveel personen. Met één klik vraag je daarna alle ingrediënten aan, per dag één aanvraag.</p>
+    <p class="note" style="margin:6px 0 0;">${periodeTitel(week)}. Plan per les welk recept je maakt en voor hoeveel personen. Met één klik vraag je daarna alle ingrediënten aan, per dag één aanvraag.</p>
     <div class="plan-form">
       <label>Dag<select id="planDag" onchange="window._planDag=this.value">${dagen.map(d=>`<option value="${d.iso}" ${d.iso===dagKeuze?'selected':''} ${d.iso<vandaag?'disabled':''}>${d.kort}</option>`).join('')}</select></label>
       <label>Les of klas<input id="planLes" placeholder="bv. 5HT praktijk" value="${esc(window._planLes||'')}" oninput="window._planLes=this.value"></label>
@@ -3402,8 +3445,8 @@ function viewWeekplanning(){
       <button class="btn" onclick="planToevoegen()">Inplannen</button>
     </div>
   </div>
-  <div class="plan-week">
-  ${dagen.map(d=>{ const lijst = mijn.filter(p=>p.datum===d.iso); const voorbij = d.iso<vandaag; return `<div class="plan-dag${voorbij?' voorbij':''}${d.iso===vandaag?' vandaag':''}">
+  ${periodeMaandagen(week).map(wk=>`${planWeken()>1?`<h3 class="plan-weekkop">${weekTitel(wk)}</h3>`:''}<div class="plan-week">
+  ${weekDagen(wk).map(d=>{ const lijst = mijn.filter(p=>p.datum===d.iso); const voorbij = d.iso<vandaag; return `<div class="plan-dag${voorbij?' voorbij':''}${d.iso===vandaag?' vandaag':''}">
     <div class="plan-dagkop">${d.kort}${d.iso===vandaag?' <span class="tag pending">vandaag</span>':''}</div>
     ${lijst.length ? lijst.map(p=>{ const r = state.recipes.find(x=>x.id===p.recipeId); const bewerk = !p.orderId && !voorbij; return `<div class="plan-item">
       <div class="plan-naam">${esc(r?r.naam:'(recept verwijderd)')}</div>
@@ -3411,7 +3454,7 @@ function viewWeekplanning(){
       <div class="plan-acties">${planStatusTag(p)}${bewerk?` <button class="btn ghost small" onclick="planWeg('${p.id}')" title="Uit de planning halen" aria-label="Uit de planning halen">✕</button>`:''}</div>
     </div>`; }).join('') : `<div class="plan-leeg">${voorbij?'—':'Niets gepland'}</div>`}
   </div>`; }).join('')}
-  </div>
+  </div>`).join('')}
   <div class="panel">
     <div class="row" style="justify-content:space-between;gap:10px;flex-wrap:wrap;">
       <div><strong>${open.length}</strong> geplande les${open.length===1?'':'sen'} nog niet aangevraagd${open.length?` · geschatte kost € ${fmt(rond(kost,2))}${onvolledig?' <span class="tag low">onvolledig</span>':''}`:''}</div>
@@ -3473,7 +3516,7 @@ function planKopieerVorige(){
 // Per dag één aanvraag met alle ingrediënten opgeteld; de lessen worden gekoppeld aan die aanvraag.
 function planAanvragen(){
   const me = currentUser(), vandaag = isoDag(new Date());
-  const open = planInWeek(planWeek(), p=>p.leerkrachtId===me.id && !p.orderId && p.datum>=vandaag);
+  const open = planInPeriode(planWeek(), p=>p.leerkrachtId===me.id && !p.orderId && p.datum>=vandaag);
   if(!open.length) return;
   const perDag = {};
   open.forEach(p=>(perDag[p.datum] = perDag[p.datum] || []).push(p));
@@ -3492,17 +3535,17 @@ function planAanvragen(){
   toast(aanvragen ? `${aanvragen} aanvra${aanvragen===1?'ag':'gen'} verstuurd naar het magazijn, één per dag.${besteld?` ${besteld} artikel(en) zijn niet genoeg op voorraad en worden besteld.`:''}${zonder.size?` Niet meegenomen (nog geen artikel gekoppeld): ${[...zonder].join(', ')}.`:''} Je volgt alles onder "Mijn bestellingen".` : 'Er viel niets aan te vragen: de geplande recepten hebben nog geen gekoppelde artikelen.');
 }
 function printWeekplanning(){
-  const me = currentUser(), week = planWeek(), dagen = weekDagen(week);
+  const me = currentUser(), week = planWeek(), dagen = periodeDagen(week);
   const mag = me.rol==='magazijn';
-  const lijst = planInWeek(week, p=>mag || p.leerkrachtId===me.id);
-  printDoc(`<h1>${mag?'Weekplanning keuken':'Weekplanning '+esc(me.naam)}</h1><p>${weekTitel(week)}</p>
+  const lijst = planInPeriode(week, p=>mag || p.leerkrachtId===me.id);
+  printDoc(`<h1>${mag?'Weekplanning keuken':'Weekplanning '+esc(me.naam)}</h1><p>${periodeTitel(week)}</p>
     ${dagen.map(d=>{ const l = lijst.filter(p=>p.datum===d.iso).sort((a,b)=>a.leerkracht.localeCompare(b.leerkracht)); return `<h2>${d.kort}</h2>${l.length?`<table><thead><tr>${mag?'<th>Chef</th>':''}<th>Les</th>${mag?'':'<th>Recept</th>'}<th>Personen</th><th>Status</th></tr></thead><tbody>${l.map(p=>{ const r = state.recipes.find(x=>x.id===p.recipeId); return `<tr>${mag?`<td>${esc(p.leerkracht)}</td>`:''}<td>${esc(p.les||'')}</td>${mag?'':`<td>${esc(r?r.naam:'')}</td>`}<td>${fmt(p.personen)}</td><td>${p.orderId?'aangevraagd':'gepland'}</td></tr>`; }).join('')}</tbody></table>`:'<p>Niets gepland.</p>'}`; }).join('')}`, 'Weekplanning '+week);
 }
 
 // Magazijn: wie kookt wanneer, en wat de geplande (nog niet aangevraagde) lessen gaan vragen.
 function viewWeekMagazijn(){
-  const week = planWeek(), dagen = weekDagen(week), vandaag = isoDag(new Date());
-  const lijst = planInWeek(week);
+  const week = planWeek(), vandaag = isoDag(new Date());
+  const lijst = planInPeriode(week);
   // Altijd alle chefs tonen (Stefan 2026-10-04), ook wie nog niets plande; plus wie intussen geen account meer heeft.
   const chefMap = new Map(state.users.filter(u=>u.rol==='leerkracht').map(u=>[u.id, u.naam]));
   lijst.forEach(p=>{ if(!chefMap.has(p.leerkrachtId)) chefMap.set(p.leerkrachtId, p.leerkracht); });
@@ -3512,17 +3555,18 @@ function viewWeekMagazijn(){
   return `<div class="panel">
     <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap;">
       <h2 style="margin:0;">Weekplanning keuken</h2>
-      <div class="row" style="gap:6px;">
+      <div class="row" style="gap:6px;flex-wrap:wrap;">
+        ${planModusKnoppen()}
         <button class="btn ghost small" onclick="planVerschuif(-1)" aria-label="Vorige week">‹</button>
         <button class="btn ghost small" onclick="planDezeWeek()">Deze week</button>
         <button class="btn ghost small" onclick="planVerschuif(1)" aria-label="Volgende week">›</button>
         <button class="btn ghost small" onclick="printWeekplanning()">Afdrukken</button>
       </div>
     </div>
-    <p class="note" style="margin:6px 0 0;">${weekTitel(week)}. Per chef en per dag: aantal lessen en personen. Lessen die nog niet aangevraagd zijn, zie je hieronder al als verwachte behoefte.</p>
-    ${chefs.length ? `<div class="table-wrap" style="margin-top:10px;"><table class="plan-raster"><thead><tr><th>Chef</th>${dagen.map(d=>`<th${d.iso===vandaag?' class="plan-nu"':''}>${d.kort}</th>`).join('')}</tr></thead><tbody>
+    <p class="note" style="margin:6px 0 0;">${periodeTitel(week)}. Per chef en per dag: aantal lessen en personen. Lessen die nog niet aangevraagd zijn, zie je hieronder al als verwachte behoefte.</p>
+    ${chefs.length ? periodeMaandagen(week).map(wk=>{ const dagen = weekDagen(wk); return `${planWeken()>1?`<h3 class="plan-weekkop">${weekTitel(wk)}</h3>`:''}<div class="table-wrap" style="margin-top:10px;"><table class="plan-raster"><thead><tr><th>Chef</th>${dagen.map(d=>`<th${d.iso===vandaag?' class="plan-nu"':''}>${d.kort}</th>`).join('')}</tr></thead><tbody>
     ${chefs.map(([id,naam])=>`<tr><td><strong>${esc(naam)}</strong></td>${dagen.map(d=>{ const l = lijst.filter(p=>p.leerkrachtId===id && p.datum===d.iso); if(!l.length) return `<td class="plan-cel leeg${d.iso===vandaag?' plan-nu':''}">—</td>`; const open = l.filter(p=>!p.orderId).length; return `<td class="plan-cel${d.iso===vandaag?' plan-nu':''}">${l.length} les${l.length===1?'':'sen'} · ${fmt(pers(l))} p.<br>${open?`<span class="tag none">${open} gepland</span>`:'<span class="tag ok">aangevraagd</span>'}</td>`; }).join('')}</tr>`).join('')}
-    </tbody></table></div>` : '<div class="empty">Voor deze week heeft nog geen enkele chef iets gepland.</div>'}
+    </tbody></table></div>`; }).join('') : '<div class="empty">Voor deze periode heeft nog geen enkele chef iets gepland.</div>'}
   </div>
   ${nogNiet.length ? `<div class="panel"><h2>Verwachte behoefte <span class="tag pending">${nogNiet.length} les${nogNiet.length===1?'':'sen'} nog niet aangevraagd</span></h2>
     <p class="note">Wat de geplande lessen gaan vragen, tegenover de vrije voorraad. Zo kan je nu al bestellen wat zeker tekort komt.</p>
@@ -4661,7 +4705,7 @@ const HT = { data:null, loading:null, error:false, fotos:{}, fotoBezig:{} };
 const HT_STATUSSEN = ['Alle','Direct leverbaar','Op bestelling','Beste koop','Nieuw artikel','Leverprobleem producent','Uitl. daarna op bestel.'];
 function htLoad(){
   if(HT.data || HT.loading) return;
-  HT.loading = fetch('catalogus/horecatotaal.json')
+  HT.loading = catFetch('catalogus/horecatotaal.json')
     .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
     .then(d=>{ HT.data = d; HT.byArt = {}; d.producten.forEach(p=>{ HT.byArt[p[0]] = p; }); htSyncPrijzen(); HT.cat = d.producten.map(p=>htCategorie(d.afdelingen[p[4]], p)); htHersorteer(); if(activeTab==='catalogus' || activeTab==='ingredienten' || activeTab==='bestellen' || htPrijzenGewijzigd) renderMain(); })
     .catch(()=>{ HT.error = true; HT.loading = null; if(activeTab==='catalogus' || activeTab==='ingredienten') renderMain(); });
@@ -4698,7 +4742,7 @@ const CAT_ICOON = {'Verse groenten & fruit':'🥕','Vlees & gevogelte':'🥩','V
 const SOL = { fotos:null, bezig:false };
 function solLoad(){
   if(SOL.fotos || SOL.bezig) return; SOL.bezig = true;
-  fetch('catalogus/sol-fotos.json').then(r=>r.ok?r.json():{}).then(m=>{ SOL.fotos=m; SOL.bezig=false; renderMain(); }).catch(()=>{ SOL.fotos={}; SOL.bezig=false; });
+  catFetch('catalogus/sol-fotos.json').then(r=>r.ok?r.json():{}).then(m=>{ SOL.fotos=m; SOL.bezig=false; renderMain(); }).catch(()=>{ SOL.fotos={}; SOL.bezig=false; });
 }
 const FOTO_VOORBEELD = {"of0":["34.233.66",50],"of1":["20.001.31",35],"of2":["28.101.15",23],"of3":["02.421.07",50],"of4":["34.502.00",12],"of5":["59.403.00",19],"of6":["24.112.65",23],"of7":["30.430.00",29],"of8":["34.900.06",50],"of10":["59.000.12",19],"of11":["59.000.12",19],"of12":["59.703.00",19],"of13":["59.000.26",19],"of14":["59.703.00",19],"of15":["59.500.49",19],"of18":["59.701.00",19],"of20":["24.125.00",23],"of23":["22.120.33",19],"of26":["59.430.00",19],"of27":["20.050.13",35],"of28":["59.003.00",19],"of29":["59.410.00",19],"of30":["20.432.10",8],"of33":["59.701.00",19],"of37":["30.433.96",29],"of38":["59.820.01",19],"of41":["26.101.96",24],"of42":["24.100.96",23],"of44":["36.314.13",23],"of45":["59.433.00",19],"of46":["36.313.63",23],"of48":["34.371.98",47],"of50":["24.301.01",32],"of52":["24.131.45",23],"of54":["58.300.12",15],"of55":["36.314.12",23],"of61":["30.435.52",29],"of63":["59.000.80",19],"of64":["59.004.00",19],"of65":["20.427.53",8],"of66":["24.127.32",23],"of70":["59.426.00",19],"of71":["34.900.06",50],"of75":["30.502.84",31],"of76":["59.500.49",19],"of77":["24.700.71",32],"of78":["59.423.00",19],"of80":["59.100.06",19],"of82":["26.102.53",24],"of83":["22.700.65",51],"of85":["24.300.23",4],"of90":["58.100.43",15],"of91":["59.112.02",19],"of94":["58.300.08",15],"of95":["59.128.77",19],"of99":["33.282.01",44],"of100":["24.102.81",23],"of103":["58.300.08",15],"of105":["24.300.18",4],"of107":["30.104.60",16],"of109":["34.799.21",18],"of110":["58.106.00",15],"of114":["58.000.50",15],"of115":["22.800.40",2],"of116":["24.126.91",23],"of120":["24.700.40",1],"of122":["24.120.25",23],"of124":["22.120.33",19],"of125":["28.010.18",7],"of126":["22.280.14",2],"of129":["59.015.00",19],"of136":["58.600.00",15],"of137":["59.429.00",19],"of139":["59.422.00",19],"of140":["34.901.92",50],"of141":["24.124.77",23],"of142":["34.920.00",29],"of143":["02.400.11",50],"of144":["22.178.37",19],"of145":["22.500.32",43],"of149":["22.119.60",19],"of150":["22.101.00",19],"of151":["22.101.00",19],"of156":["59.015.00",19],"of159":["20.000.54",36],"of161":["58.011.00",15],"of165":["34.908.01",50],"of166":["36.710.17",40],"of167":["34.799.51",18],"of168":["59.216.00",19],"of169":["36.311.18",23],"of170":["58.300.01",15],"of172":["34.218.10",50],"of173":["24.111.86",23],"of175":["59.425.00",19],"of176":["34.223.84",50],"of177":["20.550.02",28],"of178":["58.506.00",19],"of179":["59.121.00",19],"of183":["59.129.00",19],"of184":["34.301.12",13],"of186":["59.434.00",19],"of187":["54.700.34",1],"of188":["30.400.05",29],"of191":["24.415.17",32],"of193":["34.010.18",32],"of194":["24.101.09",23],"of195":["36.310.58",10],"of196":["24.700.71",32],"of197":["24.700.71",32],"of199":["54.710.00",23],"of201":["58.000.13",15],"of205":["28.104.03",21],"of206":["58.118.02",19],"of208":["24.102.89",23],"of209":["26.101.61",24],"of214":["58.121.80",15],"of216":["58.010.25",15],"of220":["36.315.89",19],"of221":["59.208.00",19],"of222":["34.502.11",12],"of223":["34.799.21",18],"of224":["59.314.00",19],"of230":["59.805.00",19],"of231":["34.213.28",50],"of235":["34.799.51",18],"of238":["34.204.32",50],"of240":["58.501.01",15],"of241":["59.406.00",19],"of243":["59.400.76",19],"of247":["34.302.97",13],"of248":["59.102.50",19],"of249":["59.113.00",19],"of250":["02.407.06",50],"of252":["36.511.15",5],"of254":["59.128.17",19],"of256":["59.500.28",19],"of261":["59.100.69",19],"of262":["36.501.90",5],"of263":["22.178.37",19],"of264":["59.703.00",19],"of265":["34.901.84",50],"of266":["33.282.01",44],"of268":["33.282.01",44],"of269":["59.011.00",19],"of271":["22.204.08",15],"of273":["22.800.40",2],"of276":["20.536.86",21],"of277":["24.401.00",32],"of280":["30.439.99",10],"of281":["34.901.09",29],"of283":["22.101.00",19],"of285":["20.005.61",36],"of287":["22.177.02",19],"of288":["34.204.32",50],"of289":["24.000.00",32],"of290":["34.000.63",24],"of292":["24.128.23",23],"of293":["34.124.80",23],"of296":["36.401.56",15],"of297":["24.702.29",10],"of298":["24.700.55",32],"of299":["30.300.15",10],"of300":["24.124.93",23],"of301":["26.320.23",23],"of302":["24.702.06",23],"of305":["34.908.01",50],"of306":["34.918.10",50],"of309":["26.301.16",32],"of312":["59.603.00",19],"of315":["58.113.80",15],"of318":["34.002.15",32],"of322":["59.100.27",19],"of323":["59.016.60",19],"of324":["24.106.47",23],"of327":["30.605.42",11],"of328":["22.139.40",11],"of331":["22.286.18",15],"of332":["22.704.62",1],"of333":["24.710.48",1],"of339":["58.800.00",15],"of341":["59.102.95",19],"of342":["36.330.10",19],"of343":["34.217.58",50],"of348":["34.607.06",50],"of349":["33.300.21",33],"of351":["59.207.01",19],"of355":["59.300.01",19],"of357":["59.317.50",19],"of359":["34.222.03",50],"of362":["59.800.21",19],"of364":["26.301.16",32],"of365":["34.255.12",50],"of367":["36.313.63",23],"of369":["36.970.35",17],"of370":["36.970.35",17],"of379":["34.700.54",24],"of380":["50.600.80",47],"of382":["34.300.99",13],"of383":["26.101.01",24],"of385":["33.500.99",42],"of386":["33.500.99",42],"of394":["34.301.61",13],"of408":["24.100.55",23],"of409":["34.799.51",18],"of410":["51.070.33",18],"of412":["26.110.26",24],"of414":["59.215.00",19],"of415":["59.212.00",19],"of416":["59.416.00",19],"of417":["26.101.43",24],"of425":["59.123.00",19],"of426":["59.009.00",19],"of433":["59.808.00",19],"of434":["59.200.09",19],"of435":["59.200.09",19],"of436":["58.507.00",19],"of437":["59.400.10",19],"of438":["59.711.02",19],"of443":["34.204.14",50],"of446":["59.127.00",19],"of447":["59.428.00",19],"of449":["51.102.26",49],"of456":["34.702.71",18],"of459":["58.300.05",15],"of460":["58.504.50",19],"of461":["34.218.24",50],"of463":["36.301.07",19],"of469":["59.405.00",19],"of470":["34.201.64",50],"of471":["34.212.22",50],"of472":["59.401.00",19],"of473":["34.900.06",50],"of483":["36.700.85",33],"of484":["34.212.01",50],"of487":["36.309.61",19],"of489":["58.300.08",15],"of498":["36.900.07",17],"of499":["36.900.07",17],"of502":["59.213.00",19],"of506":["50.300.11",39],"of507":["59.500.49",19],"of508":["59.506.02",19],"of509":["22.182.98",19],"of513":["24.104.04",27],"of515":["20.003.04",35],"of516":["34.300.96",47],"of519":["24.122.03",23],"of520":["58.122.00",15],"of527":["33.282.01",44],"of531":["36.311.59",19],"of537":["22.800.80",2],"of543":["58.300.12",15],"of550":["34.407.18",13],"of553":["22.282.88",19],"of557":["24.711.98",32],"of558":["59.840.01",19],"of559":["30.000.60",1],"of561":["58.600.00",15],"of562":["24.129.14",23],"of563":["24.129.15",23],"of565":["51.000.21",12],"of568":["20.000.11",9],"of569":["24.700.71",32],"of570":["26.300.35",32],"of571":["30.402.51",10],"of576":["54.710.00",23],"of577":["24.766.21",29],"of579":["20.517.05",28],"of580":["34.919.41",50],"of583":["36.401.57",15],"of586":["34.902.97",50],"of587":["34.902.97",50],"of588":["34.203.75",50],"of594":["36.511.15",5],"of595":["20.003.43",36],"of596":["20.001.31",35],"of598":["36.708.76",40],"of606":["24.704.09",32],"of612":["34.910.39",50],"of614":["33.282.03",44],"of616":["24.131.45",23],"of617":["22.000.10",0],"of619":["26.340.01",32],"of622":["24.300.18",4],"of623":["24.415.33",32],"of628":["34.100.14",23],"of629":["24.400.25",32],"of631":["34.100.32",19],"of636":["36.803.70",34],"cla003":["26.300.78",32],"cla004":["59.003.00",19],"cla005":["59.701.00",19],"cla006":["59.409.00",19],"cla007":["59.410.00",19],"cla008":["22.178.37",19],"cla009":["59.207.01",19],"cla010":["59.208.00",19],"cla011":["22.118.79",19],"cla013":["59.112.02",19],"cla014":["59.100.06",19],"cla015":["59.500.49",19],"cla016":["22.100.45",19],"cla017":["59.300.01",19],"cla018":["59.420.00",19],"cla020":["59.401.00",19],"cla021":["59.434.00",19],"cla022":["59.805.00",19],"cla023":["59.403.00",19],"cla024":["24.131.45",23],"cla025":["36.314.13",23],"cla026":["58.300.12",15],"cla027":["58.300.01",15],"cla028":["58.010.50",15],"cla029":["58.003.00",15],"cla030":["58.801.00",15],"cla031":["58.300.08",15],"cla032":["58.000.06",15],"del001":["36.103.11",17],"del003":["34.320.08",13],"del004":["34.300.96",47],"del005":["34.300.84",47],"del006":["34.301.77",47],"del009":["50.004.01",47],"del012":["34.300.26",13],"del013":["34.320.02",13],"del015":["50.600.22",47]};
 function productFotoHtml(p, size, bewerkbaar){
@@ -4749,7 +4793,7 @@ function htFillFotos(){
     if(HT.fotos[afd]) { htPlaatsFotos(afd); return; }
     if(HT.fotoBezig[afd]) return;
     HT.fotoBezig[afd] = true;
-    fetch('catalogus/foto-'+afd+'.json').then(r=>r.ok?r.json():{}).catch(()=>({}))
+    catFetch('catalogus/foto-'+afd+'.json').then(r=>r.ok?r.json():{}).catch(()=>({}))
       .then(map=>{ HT.fotos[afd] = map; HT.fotoBezig[afd] = false; htPlaatsFotos(afd); });
   });
 }
@@ -4975,7 +5019,7 @@ function levcatVoor(p){ return p && p.levArt ? Object.keys(LEVCAT).find(k=>LEVCA
 function levcatLoad(k){
   const c = LC[k];
   if(c.data || c.loading) return;
-  c.loading = fetch(LEVCAT[k].bestand)
+  c.loading = catFetch(LEVCAT[k].bestand)
     .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
     .then(d=>{ c.data = d; c.byArt = {}; d.producten.forEach(p=>{ c.byArt[p[0]] = p; }); const n = levcatSyncPrijzen(k); if(tabGroep(activeTab)==='catalogus' || n) renderMain(); })
     .catch(()=>{ c.error = true; c.loading = null; if(activeTab===LEVCAT[k].tab) renderMain(); });
@@ -4984,7 +5028,7 @@ function levcatFotosLaden(k){
   const c = LC[k];
   if(k==='solucious'){ if(!SOL.fotos) solLoad(); c.fotos = SOL.fotos; return; }
   if(c.fotos || c.fotoBezig) return; c.fotoBezig = true;
-  fetch(LEVCAT[k].fotos).then(r=>r.ok?r.json():{}).catch(()=>({})).then(m=>{ c.fotos = m; c.fotoBezig = false; renderMain(); });
+  catFetch(LEVCAT[k].fotos).then(r=>r.ok?r.json():{}).catch(()=>({})).then(m=>{ c.fotos = m; c.fotoBezig = false; renderMain(); });
 }
 function levcatSyncPrijzen(k){
   const d = LC[k].data; if(!d || !d.opgehaald) return 0;
@@ -6590,7 +6634,7 @@ function userAfd(u){ return !u ? null : (u.rol==='leerkracht' && u.afdeling==='b
 function bkScope(){ return taAfd(currentUser()); }
 function inScope(uid){ const sc = bkScope(); if(!sc) return true; const u = state.users.find(x=>x.id===uid); return (userAfd(u)||'horeca')===sc; }
 function receptInScope(r){ const sc = bkScope(); return !sc || (sc==='bakkerij') === (recBib(r)==='bakkerij'); }
-const ROL_LABEL = {magazijn:'Magazijnbeheerder', leerkracht:'Keuken / Chef', zaal:'Zaal / maître', keldermeester:'Keldermeester', boekhouding:'TA Horeca'};
+const ROL_LABEL = {beheerder:'Systeembeheerder', magazijn:'Magazijnbeheerder', leerkracht:'Keuken / Chef', zaal:'Zaal / maître', keldermeester:'Keldermeester', boekhouding:'TA Horeca'};
 function viewGebruikers(){
   return `<div class="panel">
     <div class="row" style="justify-content:space-between;">
@@ -6604,7 +6648,7 @@ function viewGebruikers(){
         <td>${u.naam}</td>
         <td><span class="tag ${u.rol==='magazijn'?'pending':u.rol==='boekhouding'?'low':'ok'}">${rolLabel(u)}</span>${u.rol==='leerkracht'||u.rol==='boekhouding'?` <button class="btn ghost small" onclick="wisselAfdeling('${u.id}')">Naar ${u.afdeling==='bakkerij'?(u.rol==='boekhouding'?'horeca':'keuken'):'bakkerij'}</button>`:''}</td>
         <td style="font-size:13px;color:var(--ink-soft);">${u.pinHash?'ingesteld':'nog niet gekozen'}</td>
-        <td style="text-align:right;white-space:nowrap;">${u.pinHash?`<button class="btn ghost small" onclick="wisPin('${u.id}')">Pincode wissen</button>`:''}${u.id===state.currentUser ? '' : `<button class="btn ghost small" onclick="deleteUser('${u.id}')">Wis</button>`}</td>
+        <td style="text-align:right;white-space:nowrap;">${isBeheerder(u) && !isBeheerder(currentUser()) ? '<span class="note" style="margin:0;">via de systeembeheerder</span>' : `${u.pinHash?`<button class="btn ghost small" onclick="wisPin('${u.id}')">Pincode wissen</button>`:''}${u.id===state.currentUser ? '' : `<button class="btn ghost small" onclick="deleteUser('${u.id}')">Wis</button>`}`}</td>
       </tr>
     `).join('')}
     </tbody></table>
@@ -6626,6 +6670,7 @@ function showAddUser(){
         <option value="keldermeester">Keldermeester</option>
         <option value="boekhouding">TA Horeca</option>
         <option value="ta-bakkerij">TA Bakkerij</option>
+        ${isBeheerder(currentUser()) ? '<option value="beheerder">Systeembeheerder</option>' : ''}
       </select>
     </div>
     <div style="text-align:right;margin-top:14px;">
@@ -6657,7 +6702,8 @@ function wisselAfdeling(uid){
 function deleteUser(uid){
   if(uid===state.currentUser) return;
   const u = state.users.find(x=>x.id===uid); if(!u) return;
-  if(['magazijn','boekhouding','keldermeester'].includes(u.rol) && state.users.filter(x=>x.rol===u.rol).length<=1){ toast(`${u.naam} is de enige met deze rol. Maak eerst iemand anders aan met dezelfde rol.`); return; }
+  if(isBeheerder(u) && !isBeheerder(currentUser())){ toast('Een systeembeheerder kan alleen door een andere systeembeheerder gewist worden.'); return; }
+  if(['beheerder','magazijn','boekhouding','keldermeester'].includes(u.rol) && state.users.filter(x=>x.rol===u.rol).length<=1){ toast(`${u.naam} is de enige met deze rol. Maak eerst iemand anders aan met dezelfde rol.`); return; }
   if(!confirm(`${u.naam} wissen? Deze persoon kan dan niet meer aanmelden. Bestellingen en historiek blijven bewaard.`)) return;
   state.activity.push({tijd:nowStr(), tekst:`Gebruiker gewist: ${u.naam}.`});
   state.users = state.users.filter(u=>u.id!==uid);
@@ -8130,6 +8176,322 @@ function csvHaccp(){
 }
 
 /* ---------- Magazijn: Historiek ---------- */
+/* ---------- Systeembeheerder: beheersmodule (Hans, 2026-10-22) ----------
+   Gebruikers aanmaken en beheren, toegang en toestellen, back-ups en systeeminfo.
+   Op de server (window.COLOMARKT_SERVER) meldt de beheerder zich aan met het beheerwachtwoord van de server;
+   de serverfuncties (toestellen, toegangscode, serverback-ups) controleert de server zelf. */
+const BH_ROLLEN = [['leerkracht','Keuken / Chef'],['bakker','Bakkerij / Bakker'],['zaal','Zaal / maître'],['magazijn','Magazijnbeheerder'],['keldermeester','Keldermeester'],['boekhouding','TA Horeca'],['ta-bakkerij','TA Bakkerij'],['beheerder','Systeembeheerder']];
+function isBeheerder(u){ return !!u && u.rol==='beheerder'; }
+function opServer(){ return !!window.COLOMARKT_SERVER; }
+function rolSleutel(u){ return u.rol==='leerkracht' && u.afdeling==='bakkerij' ? 'bakker' : u.rol==='boekhouding' && u.afdeling==='bakkerij' ? 'ta-bakkerij' : u.rol; }
+function zetRol(u, sleutel){
+  const bak = sleutel==='bakker' || sleutel==='ta-bakkerij';
+  u.rol = sleutel==='bakker' ? 'leerkracht' : sleutel==='ta-bakkerij' ? 'boekhouding' : sleutel;
+  if(bak) u.afdeling = 'bakkerij'; else delete u.afdeling;
+}
+// Rollen waarvan er altijd minstens één moet blijven.
+const BH_VERPLICHT = ['beheerder','magazijn','boekhouding','keldermeester'];
+function laatsteVanRol(u){ return BH_VERPLICHT.includes(u.rol) && state.users.filter(x=>x.rol===u.rol).length<=1; }
+
+window._bh = window._bh || {aangemeld:null, info:null, toestellen:null, backups:null, log:null, bezig:{}, fout:''};
+async function bhApi(pad, body){
+  const opt = body===undefined ? {cache:'no-store', credentials:'same-origin'} : {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)};
+  const r = await fetch('/api/beheer/'+pad, opt);
+  const j = await r.json().catch(()=>({}));
+  if(r.status===401 && j.code==='beheer'){ window._bh.aangemeld = false; renderMain(); throw new Error(j.fout||'Meld je opnieuw aan.'); }
+  if(!r.ok) throw new Error(j.fout || ('Fout '+r.status));
+  return j;
+}
+function bhLaad(sleutel, pad, veld){
+  const bh = window._bh;
+  if(!opServer() || bh.aangemeld===false || bh.bezig[sleutel] || bh.fout) return; // na een fout pas opnieuw via "Opnieuw proberen"
+  bh.bezig[sleutel] = true;
+  bhApi(pad).then(j=>{ bh[sleutel] = veld ? j[veld] : j; bh.aangemeld = true; })
+    .catch(e=>{ if(bh.aangemeld!==false) bh.fout = e.message; })
+    .then(()=>{ bh.bezig[sleutel] = false; if(isBeheerder(currentUser())) renderMain(); });
+}
+function bhVernieuw(){ const bh = window._bh; bh.info = bh.toestellen = bh.backups = bh.log = null; bh.fout=''; renderMain(); }
+function bhDatum(iso){ if(!iso) return '—'; const d = new Date(iso); return isNaN(d) ? esc(iso) : d.toLocaleDateString('nl-BE')+' '+d.toLocaleTimeString('nl-BE',{hour:'2-digit',minute:'2-digit'}); }
+function bhGrootte(n){ return n>=1048576 ? fmt(n/1048576)+' MB' : Math.max(1,Math.round(n/1024))+' kB'; }
+function bhToestelNaam(ua){
+  ua = ua||'';
+  const os = /iPhone/.test(ua)?'iPhone':/iPad/.test(ua)?'iPad':/Android/.test(ua)?'Android':/Windows/.test(ua)?'Windows':/Mac OS X|Macintosh/.test(ua)?'Mac':/CrOS/.test(ua)?'Chromebook':/Linux/.test(ua)?'Linux':'Onbekend';
+  const br = /Edg\//.test(ua)?'Edge':/Firefox\//.test(ua)?'Firefox':/Chrome\//.test(ua)?'Chrome':/Safari\//.test(ua)?'Safari':'';
+  return os + (br?' · '+br:'');
+}
+// Paneel dat serverfuncties afschermt: enkel op de server en na aanmelden met het beheerwachtwoord.
+function bhServerSlot(inhoud){
+  if(!opServer()) return `<p class="note">Deze instellingen bestaan alleen in de serverversie van Colomarkt+ (colomarkt.colomaplus.be).</p>`;
+  if(window._bh.aangemeld===false) return `<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;">
+      <span style="flex:1;min-width:200px;font-size:13.5px;">Je beheersessie op de server is verlopen. Geef het beheerwachtwoord opnieuw in.</span>
+      <input id="bhHerPw" type="password" autocomplete="current-password" placeholder="Beheerwachtwoord" style="max-width:220px;" onkeydown="if(event.key==='Enter')bhHeraanmelden()">
+      <button class="btn small" onclick="bhHeraanmelden()">Aanmelden</button></div>`;
+  return inhoud();
+}
+async function bhHeraanmelden(){
+  const pw = (document.getElementById('bhHerPw')||{}).value||'';
+  try{ await bhApi('aanmelden', {wachtwoord:pw}); window._bh.aangemeld = true; bhVernieuw(); }
+  catch(e){ toast(esc(e.message)); }
+}
+function bhFout(){ const f = window._bh.fout; return f ? `<div class="note" style="color:var(--brick);margin:8px 0;">${esc(f)} <button class="btn ghost small" onclick="bhVernieuw()">Opnieuw proberen</button></div>` : ''; }
+
+/* --- Gebruikers --- */
+function viewBhGebruikers(){
+  const per = {}; state.users.forEach(u=>{ const l = rolLabel(u); per[l] = (per[l]||0)+1; });
+  const rij = u=>{
+    const zelf = u.id===state.currentUser;
+    const pin = isBeheerder(u) && opServer() ? 'wachtwoord (server)' : u.pinHash ? 'ingesteld' : 'nog niet gekozen';
+    return `<tr>
+      <td>${esc(u.naam)}${zelf?' <span class="tag ok">jij</span>':''}</td>
+      <td><span class="tag ${isBeheerder(u)?'pending':u.rol==='magazijn'?'pending':u.rol==='boekhouding'?'low':'ok'}">${rolLabel(u)}</span></td>
+      <td style="font-size:13px;color:var(--ink-soft);">${pin}</td>
+      <td style="font-size:13px;color:var(--ink-soft);white-space:nowrap;">${u.laatstGezien?bhDatum(u.laatstGezien):'—'}</td>
+      <td style="text-align:right;white-space:nowrap;">
+        <button class="btn ghost small" onclick="bhGebruikerDialoog('${u.id}')">Wijzig</button>
+        ${u.pinHash && !(isBeheerder(u) && opServer()) ? `<button class="btn ghost small" onclick="wisPin('${u.id}')">Pincode wissen</button>` : ''}
+        ${zelf ? '' : `<button class="btn ghost small" onclick="deleteUser('${u.id}')">Wis</button>`}
+      </td></tr>`;
+  };
+  const groepen = [['Beheer', u=>isBeheerder(u)], ['Magazijn & kelder', u=>u.rol==='magazijn'||u.rol==='keldermeester'], ['Keuken & bakkerij', u=>u.rol==='leerkracht'], ['Zaal', u=>u.rol==='zaal'], ['TA', u=>u.rol==='boekhouding']];
+  const bekend = u=>groepen.some(([,f])=>f(u));
+  return `<div class="panel">
+    <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <h2 style="margin:0;">Gebruikers</h2>
+      <button class="btn small" onclick="bhGebruikerDialoog(null)">+ Nieuwe gebruiker</button>
+    </div>
+    <p class="note">${state.users.length} gebruikers: ${Object.entries(per).map(([l,n])=>`${n} ${esc(l)}`).join(' · ')}.</p>
+    <div class="table-wrap"><table><thead><tr><th>Naam</th><th>Rol</th><th>Aanmelden</th><th>Laatst aangemeld</th><th></th></tr></thead><tbody>
+    ${groepen.map(([titel,f])=>{ const us = state.users.filter(f); return us.length ? `<tr><td colspan="5" style="font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);padding-top:14px;">${titel}</td></tr>${us.map(rij).join('')}` : ''; }).join('')}
+    ${state.users.filter(u=>!bekend(u)).map(rij).join('')}
+    </tbody></table></div>
+    <p class="note">Iedereen meldt zich aan met zijn naam en een eigen pincode van 4 cijfers, die hij de eerste keer zelf kiest. Pincode vergeten? Wis ze hier, dan kiest die persoon een nieuwe.${opServer()?' De systeembeheerder meldt zich aan met het beheerwachtwoord van de server.':''} Van de rollen beheerder, magazijn, TA Horeca en keldermeester blijft er altijd minstens één.</p>
+  </div>`;
+}
+function bhGebruikerDialoog(uid){
+  const u = uid ? state.users.find(x=>x.id===uid) : null;
+  const huidig = u ? rolSleutel(u) : 'leerkracht';
+  const zelf = u && u.id===state.currentUser;
+  document.getElementById('toastBody').innerHTML = `
+    <h2 style="font-size:16px;margin-bottom:12px;">${u?'Gebruiker wijzigen':'Nieuwe gebruiker'}</h2>
+    <div class="grid" style="gap:8px;">
+      <label style="font-size:13px;">Naam<input id="bhNaam" value="${u?esc(u.naam):''}" placeholder="bv. Chef patisserie B" style="width:100%;"></label>
+      <label style="font-size:13px;">Rol<select id="bhRol" style="width:100%;" ${zelf?'disabled':''}>${BH_ROLLEN.map(([k,l])=>`<option value="${k}" ${k===huidig?'selected':''}>${l}</option>`).join('')}</select></label>
+      ${zelf?'<p class="note" style="margin:0;">Je eigen rol kan je niet wijzigen.</p>':''}
+    </div>
+    <div style="text-align:right;margin-top:14px;">
+      <button class="btn ghost" onclick="document.getElementById('toastDialog').close()">Annuleer</button>
+      <button class="btn" onclick="bhGebruikerBewaar(${u?`'${u.id}'`:'null'})">${u?'Bewaren':'Toevoegen'}</button>
+    </div>`;
+  document.getElementById('toastDialog').showModal();
+  setTimeout(()=>{ const n = document.getElementById('bhNaam'); if(n) n.focus(); }, 30);
+}
+function bhGebruikerBewaar(uid){
+  if(!isBeheerder(currentUser())) return;
+  const naam = document.getElementById('bhNaam').value.trim();
+  const sleutel = document.getElementById('bhRol').value;
+  if(!naam){ toast('Geef een naam in.'); return; }
+  if(state.users.some(x=>x.id!==uid && x.naam.toLowerCase()===naam.toLowerCase())){ toast('Er is al een gebruiker met die naam.'); return; }
+  if(!uid){
+    const u = {id:'usr'+Date.now(), naam}; zetRol(u, sleutel);
+    state.users.push(u);
+    state.activity.push({tijd:nowStr(), tekst:`Nieuwe gebruiker toegevoegd door ${currentUser().naam}: ${naam} (${rolLabel(u)}).`});
+  } else {
+    const u = state.users.find(x=>x.id===uid); if(!u) return;
+    const oudeNaam = u.naam, oudeRol = rolLabel(u);
+    if(u.id!==state.currentUser && sleutel!==rolSleutel(u)){
+      const rolNa = {rol: sleutel==='bakker' ? 'leerkracht' : sleutel==='ta-bakkerij' ? 'boekhouding' : sleutel};
+      if(rolNa.rol!==u.rol && laatsteVanRol(u)){ toast(`${u.naam} is de enige ${rolLabel(u)}. Maak eerst iemand anders aan met die rol.`); return; }
+      zetRol(u, sleutel);
+      // Een beheerder op de server gebruikt geen pincode.
+      if(isBeheerder(u) && opServer()) delete u.pinHash;
+    }
+    u.naam = naam;
+    const wat = [oudeNaam!==naam ? `naam "${oudeNaam}" → "${naam}"` : '', oudeRol!==rolLabel(u) ? `rol ${oudeRol} → ${rolLabel(u)}` : ''].filter(Boolean).join(', ');
+    if(wat) state.activity.push({tijd:nowStr(), tekst:`Gebruiker gewijzigd door ${currentUser().naam}: ${wat}.`});
+  }
+  save();
+  document.getElementById('toastDialog').close();
+  renderShell();
+}
+
+/* --- Toegang & toestellen --- */
+function viewBhToegang(){
+  const bh = window._bh;
+  if(opServer() && bh.aangemeld!==false && !bh.toestellen) bhLaad('toestellen', 'toestellen', 'toestellen');
+  if(opServer() && bh.aangemeld!==false && !bh.info) bhLaad('info', 'info');
+  return `<div class="panel">
+    <h2>Toegangscode</h2>
+    <p class="note" style="margin-top:-4px;">Elk toestel geeft deze code één keer in. Wijzig je de code, dan blijft alleen dit toestel aangemeld; alle andere moeten de nieuwe code ingeven.</p>
+    ${bhServerSlot(()=>`${bhFout()}
+      ${bh.info ? `<p class="note">De huidige code komt uit ${bh.info.codeBron==='app'?'de beheersmodule':'het instellingenbestand op de server (/etc/colomarkt.env)'}.</p>` : ''}
+      <div class="row" style="gap:8px;flex-wrap:wrap;">
+        <input id="bhCode1" type="password" autocomplete="new-password" placeholder="Nieuwe toegangscode (min. 8 tekens)" style="flex:1;min-width:200px;">
+        <input id="bhCode2" type="password" autocomplete="new-password" placeholder="Nog eens" style="flex:1;min-width:160px;">
+        <button class="btn small" onclick="bhCodeWijzig()">Code wijzigen</button>
+      </div>`)}
+  </div>
+  <div class="panel">
+    <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <h2 style="margin:0;">Toestellen met toegang</h2>
+      ${opServer() && bh.aangemeld!==false ? `<div class="row" style="gap:8px;"><button class="btn ghost small" onclick="bhVernieuw()">Vernieuwen</button><button class="btn secondary small" onclick="bhAllesAfmelden()">Alle andere toestellen afmelden</button></div>` : ''}
+    </div>
+    ${bhServerSlot(()=> !bh.toestellen ? (bhFout() || '<p class="note">Laden…</p>') : `
+      <p class="note">${bh.toestellen.length} toestellen. Een verloren of gestolen toestel? Trek de toegang in; het moet dan opnieuw de code ingeven.</p>
+      <div class="table-wrap"><table><thead><tr><th>Naam</th><th>Toestel</th><th>Toegang sinds</th><th>Laatst gezien</th><th></th></tr></thead><tbody>
+      ${bh.toestellen.map(t=>`<tr>
+        <td>${t.naam?esc(t.naam):'<span style="color:var(--ink-soft);">—</span>'}${t.ditToestel?' <span class="tag ok">dit toestel</span>':''}</td>
+        <td style="font-size:13px;" title="${esc(t.toestel)}">${esc(bhToestelNaam(t.toestel))}</td>
+        <td style="font-size:13px;color:var(--ink-soft);white-space:nowrap;">${bhDatum(t.sinds)}</td>
+        <td style="font-size:13px;color:var(--ink-soft);white-space:nowrap;">${bhDatum(t.laatst)}</td>
+        <td style="text-align:right;white-space:nowrap;"><button class="btn ghost small" onclick="bhToestelNaam_('${t.id}')">Naam geven</button>${t.ditToestel?'':`<button class="btn ghost small" onclick="bhToestelIntrekken('${t.id}')">Intrekken</button>`}</td>
+      </tr>`).join('') || '<tr><td colspan="5" class="empty">Geen toestellen.</td></tr>'}
+      </tbody></table></div>`)}
+  </div>
+  <div class="panel">
+    <h2>Beheerwachtwoord</h2>
+    <p class="note" style="margin-top:-4px;">Hiermee meldt de systeembeheerder zich aan. Minstens 10 tekens.</p>
+    ${bhServerSlot(()=>`<div class="row" style="gap:8px;flex-wrap:wrap;">
+        <input id="bhPwOud" type="password" autocomplete="current-password" placeholder="Huidig wachtwoord" style="flex:1;min-width:160px;">
+        <input id="bhPw1" type="password" autocomplete="new-password" placeholder="Nieuw wachtwoord" style="flex:1;min-width:160px;">
+        <input id="bhPw2" type="password" autocomplete="new-password" placeholder="Nog eens" style="flex:1;min-width:140px;">
+        <button class="btn small" onclick="bhWachtwoordWijzig()">Wijzigen</button>
+      </div>`)}
+  </div>`;
+}
+async function bhCodeWijzig(){
+  const a = document.getElementById('bhCode1').value.trim(), b = document.getElementById('bhCode2').value.trim();
+  if(a.length<8){ toast('Kies een toegangscode van minstens 8 tekens.'); return; }
+  if(a!==b){ toast('De twee codes zijn niet gelijk.'); return; }
+  if(!confirm('Toegangscode wijzigen? Alle andere toestellen moeten daarna de nieuwe code ingeven.')) return;
+  try{ const j = await bhApi('toegangscode', {code:a}); state.activity.push({tijd:nowStr(), tekst:'Toegangscode gewijzigd door de systeembeheerder.'}); save(); toast(`Toegangscode gewijzigd. ${j.afgemeld} andere toestellen moeten de nieuwe code ingeven.`); bhVernieuw(); }
+  catch(e){ toast(esc(e.message)); }
+}
+async function bhWachtwoordWijzig(){
+  const oud = document.getElementById('bhPwOud').value, a = document.getElementById('bhPw1').value, b = document.getElementById('bhPw2').value;
+  if(a.length<10){ toast('Kies een wachtwoord van minstens 10 tekens.'); return; }
+  if(a!==b){ toast('De twee wachtwoorden zijn niet gelijk.'); return; }
+  try{ await bhApi('wachtwoord', {huidig:oud, nieuw:a}); toast('Beheerwachtwoord gewijzigd.'); renderMain(); }
+  catch(e){ toast(esc(e.message)); }
+}
+async function bhToestelNaam_(id){
+  const t = (window._bh.toestellen||[]).find(x=>x.id===id); if(!t) return;
+  const naam = prompt('Naam voor dit toestel (bv. pc magazijn, gsm Stefan):', t.naam||''); if(naam===null) return;
+  try{ await bhApi('toestel', {id, actie:'naam', naam}); window._bh.toestellen = null; renderMain(); }catch(e){ toast(esc(e.message)); }
+}
+async function bhToestelIntrekken(id){
+  const t = (window._bh.toestellen||[]).find(x=>x.id===id); if(!t) return;
+  if(!confirm(`Toegang intrekken voor ${t.naam||bhToestelNaam(t.toestel)}? Dat toestel moet dan opnieuw de toegangscode ingeven.`)) return;
+  try{ await bhApi('toestel', {id, actie:'intrekken'}); window._bh.toestellen = null; toast('Toegang ingetrokken.'); renderMain(); }catch(e){ toast(esc(e.message)); }
+}
+async function bhAllesAfmelden(){
+  if(!confirm('Alle andere toestellen afmelden? Ze moeten daarna allemaal opnieuw de toegangscode ingeven.')) return;
+  try{ const j = await bhApi('toestellen-afmelden', {}); toast(`${j.afgemeld} toestellen afgemeld.`); bhVernieuw(); }catch(e){ toast(esc(e.message)); }
+}
+
+/* --- Back-ups --- */
+function viewBhBackup(){
+  const bh = window._bh;
+  if(opServer() && bh.aangemeld!==false && !bh.backups) bhLaad('backups', 'backups');
+  return viewBackup() + `<div class="panel">
+    <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <h2 style="margin:0;">Back-ups op de server</h2>
+      ${opServer() && bh.aangemeld!==false ? `<div class="row" style="gap:8px;flex-wrap:wrap;">
+        <button class="btn ghost small" onclick="bhVernieuw()">Vernieuwen</button>
+        <a class="btn ghost small" href="/api/beheer/backup?bestand=huidig" download>Huidige gegevens downloaden</a>
+        <button class="btn secondary small" onclick="bhBackupMaken()">Nu een back-up maken</button></div>` : ''}
+    </div>
+    ${bhServerSlot(()=> !bh.backups ? (bhFout() || '<p class="note">Laden…</p>') : `
+      <p class="note">De server maakt elke dag zelf een back-up en bewaart er ${bh.backups.dagen}. Voor elke update en elk terugzetten komt er een extra kopie bij. Terugzetten vervangt alle gegevens op alle toestellen; de huidige toestand wordt eerst bewaard als vangnet.</p>
+      <div class="table-wrap"><table><thead><tr><th>Bestand</th><th>Soort</th><th>Gemaakt</th><th style="text-align:right;">Grootte</th><th></th></tr></thead><tbody>
+      ${bh.backups.backups.map(b=>`<tr>
+        <td style="font-size:13px;font-family:ui-monospace,monospace;">${esc(b.bestand)}</td>
+        <td style="font-size:13px;">${esc(b.soort)}</td>
+        <td style="font-size:13px;color:var(--ink-soft);white-space:nowrap;">${bhDatum(b.datum)}</td>
+        <td style="font-size:13px;text-align:right;white-space:nowrap;">${bhGrootte(b.grootte)}</td>
+        <td style="text-align:right;white-space:nowrap;"><a class="btn ghost small" href="/api/beheer/backup?bestand=${encodeURIComponent(b.bestand)}" download>Download</a><button class="btn ghost small" onclick="bhTerugzetten('${esc(b.bestand)}')">Terugzetten</button></td>
+      </tr>`).join('') || '<tr><td colspan="5" class="empty">Nog geen back-ups.</td></tr>'}
+      </tbody></table></div>`)}
+  </div>`;
+}
+async function bhBackupMaken(){
+  try{ const j = await bhApi('backup-maken', {}); toast('Back-up gemaakt: '+j.bestand); window._bh.backups = null; renderMain(); }catch(e){ toast(esc(e.message)); }
+}
+async function bhTerugzetten(bestand){
+  if(!confirm(`Back-up ${bestand} terugzetten?\n\nDit vervangt ALLE gegevens op alle toestellen door die van de back-up. Wat daarna is ingegeven, is weg. De huidige toestand wordt eerst als vangnet bewaard.`)) return;
+  try{
+    const j = await bhApi('backup-terugzetten', {bestand});
+    toast(`Back-up teruggezet. Vangnet: ${j.vangnet}. De app herlaadt; vraag de anderen om de app te herladen.`);
+    setTimeout(()=>location.reload(), 2500);
+  }catch(e){ toast(esc(e.message)); }
+}
+
+/* --- Systeem --- */
+function viewBhSysteem(){
+  const bh = window._bh;
+  if(opServer() && bh.aangemeld!==false && !bh.info) bhLaad('info', 'info');
+  if(opServer() && bh.aangemeld!==false && !bh.log) bhLaad('log', 'logboek', 'log');
+  let grootte = 0; try{ grootte = JSON.stringify(state).length; }catch(e){}
+  const aan = b=>b ? '<span class="tag ok">aan</span>' : '<span class="tag pending">uit</span>';
+  const i = bh.info;
+  return `<div class="panel">
+    <h2>Gegevens in de app</h2>
+    <div class="table-wrap"><table><tbody>
+      <tr><td>Gebruikers</td><td>${state.users.length}</td></tr>
+      <tr><td>Producten</td><td>${(state.products||[]).length}</td></tr>
+      <tr><td>Aanvragen en bestellingen</td><td>${(state.orders||[]).length}</td></tr>
+      <tr><td>Recepten</td><td>${(state.recipes||[]).length}</td></tr>
+      <tr><td>Leveranciers</td><td>${(state.leveranciers||[]).length}</td></tr>
+      <tr><td>Grootte van de gegevens</td><td>${bhGrootte(grootte)}</td></tr>
+      <tr><td>Opslag</td><td>${opServer() ? 'centraal op de server, gedeeld door alle toestellen' : 'in de browser van dit toestel'}</td></tr>
+    </tbody></table></div>
+  </div>
+  <div class="panel">
+    <div class="row" style="justify-content:space-between;"><h2 style="margin:0;">Server</h2>${opServer() && bh.aangemeld!==false ? '<button class="btn ghost small" onclick="bhVernieuw()">Vernieuwen</button>' : ''}</div>
+    ${bhServerSlot(()=> !i ? (bhFout() || '<p class="note">Laden…</p>') : `<div class="table-wrap"><table><tbody>
+      <tr><td>Gegevensversie</td><td>${i.versie}</td></tr>
+      <tr><td>Draait sinds</td><td>${bhDatum(i.gestart)}</td></tr>
+      <tr><td>App bijgewerkt</td><td>${bhDatum(i.appDatum)}</td></tr>
+      <tr><td>Node.js</td><td>${esc(i.node)}</td></tr>
+      <tr><td>Gegevensbestand</td><td>${bhGrootte(i.dataGrootte)} in ${esc(i.dataMap)}</td></tr>
+      <tr><td>Back-ups</td><td>${i.backups} bestanden, dagelijkse back-ups ${i.backupDagen} dagen bewaard</td></tr>
+      <tr><td>Toestellen met toegang</td><td>${i.toestellen}</td></tr>
+      <tr><td>Foto's lezen met Claude</td><td>${aan(i.ai)} ${i.ai?esc(i.aiModel):'(ANTHROPIC_API_KEY in /etc/colomarkt.env)'}</td></tr>
+      <tr><td>Claude-taken</td><td>webshop ${aan(i.routines.webshop)} · bestelstatus ${aan(i.routines.bestelstatus)} · prijzen ${aan(i.routines.prijzen)}</td></tr>
+      <tr><td>Serversleutel voor taken</td><td>${aan(i.serverSleutel)}</td></tr>
+    </tbody></table></div>
+    <p class="note">Sleutels voor Claude en de Claude-taken stel je in op de server, in /etc/colomarkt.env, en daarna: sudo systemctl restart colomarkt.</p>`)}
+  </div>
+  <div class="panel">
+    <h2>Logboek van de beheersmodule</h2>
+    ${bhServerSlot(()=> !bh.log ? (bhFout() || '<p class="note">Laden…</p>') : `<div class="table-wrap"><table><tbody>
+      ${bh.log.map(l=>`<tr><td style="white-space:nowrap;color:var(--ink-soft);font-size:13px;">${bhDatum(l.tijd)}</td><td style="font-size:13.5px;">${esc(l.tekst)}</td><td style="font-size:12px;color:var(--ink-soft);white-space:nowrap;">${esc(l.ip||'')}</td></tr>`).join('') || '<tr><td class="empty">Nog niets.</td></tr>'}
+    </tbody></table></div>`)}
+  </div>`;
+}
+
+/* --- Aanmelden als beheerder op de server --- */
+function bhLoginHtml(u){
+  return `<div class="lg-pin" style="max-width:340px;">
+    <h2 style="font-size:19px;">${esc(u.naam)}</h2>
+    <p class="note" style="margin:2px 0 12px;">Geef het beheerwachtwoord van de server in.</p>
+    <input id="bhLoginPw" type="password" autocomplete="current-password" style="width:100%;font-size:17px;padding:10px;" onkeydown="if(event.key==='Enter')bhLogin()">
+    <div class="row" style="gap:8px;margin-top:12px;justify-content:space-between;">
+      <button class="btn ghost" onclick="kiesGebruiker(null)">Terug</button>
+      <button class="btn" onclick="bhLogin()">Aanmelden</button>
+    </div>
+    <div class="lg-fout">${esc(_lg.fout)}</div>
+  </div>`;
+}
+async function bhLogin(){
+  const pw = (document.getElementById('bhLoginPw')||{}).value||'';
+  if(!pw) return;
+  try{
+    await bhApi('aanmelden', {wachtwoord:pw});
+    window._bh = {aangemeld:true, info:null, toestellen:null, backups:null, log:null, bezig:{}, fout:''};
+    aanmelden(_lg.uid);
+  }catch(e){ _lg.fout = e.message; renderLogin(); setTimeout(()=>{ const n=document.getElementById('bhLoginPw'); if(n) n.focus(); }, 20); }
+}
+
 function viewHistoriek(){
   const all = state.activity.slice().reverse();
   return `<div class="panel"><h2>Volledige activiteitenhistoriek</h2>

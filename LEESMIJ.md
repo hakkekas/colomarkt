@@ -36,6 +36,19 @@ Een nieuwe versie zet je zo op de server: `sudo /opt/colomarkt/update.sh colomar
 
 De gegevens blijven staan. Voor elke update wordt er een extra back-up gemaakt. Staat de code later op GitHub, dan volstaat `sudo /opt/colomarkt/update.sh`.
 
+## Systeembeheerder en beheersmodule
+
+Op het aanmeldscherm staat onder **Beheer** de gebruiker **Systeembeheerder**. Die meldt zich niet aan met een pincode, maar met het **beheerwachtwoord** van de server. Het installatiescript of het updatescript maakt dat wachtwoord aan en toont het één keer. Het staat ook in `/etc/colomarkt.env` bij `BEHEER_WACHTWOORD`.
+
+In de beheersmodule kan de systeembeheerder:
+
+- **Gebruikers** aanmaken, hernoemen, een andere rol geven, hun pincode wissen en ze verwijderen. Dat geldt voor chefs, bakkers, zaal, magazijn, kelder, TA en andere beheerders.
+- **Toegang & toestellen**: de toegangscode wijzigen, zien welke toestellen toegang hebben, ze een naam geven, de toegang van één toestel intrekken of alle andere toestellen afmelden. Het beheerwachtwoord wijzig je hier ook.
+- **Back-ups**: zelf een back-up downloaden of terugzetten, de back-ups op de server bekijken, downloaden of terugzetten, en meteen een extra back-up maken.
+- **Systeem**: de toestand van de server bekijken (versie, back-ups, AI en Claude-taken) en het logboek van alle beheeracties.
+
+Een toegangscode of beheerwachtwoord dat in de app gewijzigd is, staat in `/var/lib/colomarkt/instellingen.json` en gaat voor op `/etc/colomarkt.env`. Ben je het beheerwachtwoord kwijt? Verwijder dan `beheerHash` uit dat bestand (of het hele bestand, maar dan geldt ook weer de toegangscode uit `/etc/colomarkt.env`), zet een nieuw `BEHEER_WACHTWOORD` in `/etc/colomarkt.env` en doe `sudo systemctl restart colomarkt`.
+
 ## Back-ups
 
 - De server bewaart de laatste 30 dagen elke dag een kopie in `/var/lib/colomarkt/backups/`.

@@ -27,11 +27,13 @@ chmod +x "$DOEL"/install.sh "$DOEL"/update.sh
 
 echo "3/5 Instellingen"
 if [ ! -f /etc/colomarkt.env ]; then
-  CODE="$(tr -dc 'a-z0-9' </dev/urandom | head -c 10 || true)"
-  SLEUTEL="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40 || true)"
-  sed -e "s/^TOEGANGSCODE=.*/TOEGANGSCODE=$CODE/" -e "s/^SERVER_SLEUTEL=.*/SERVER_SLEUTEL=$SLEUTEL/" "$DOEL/config.voorbeeld.env" > /etc/colomarkt.env
+  CODE="$(node -e "const c=require('crypto');let s='';while(s.length<10)s+='abcdefghijkmnpqrstuvwxyz23456789'[c.randomInt(32)];console.log(s)")"
+  SLEUTEL="$(node -e "console.log(require('crypto').randomBytes(30).toString('base64url'))")"
+  BEHEER="$(node -e "console.log(require('crypto').randomBytes(12).toString('base64url'))")"
+  sed -e "s/^TOEGANGSCODE=.*/TOEGANGSCODE=$CODE/" -e "s/^SERVER_SLEUTEL=.*/SERVER_SLEUTEL=$SLEUTEL/" -e "s/^BEHEER_WACHTWOORD=.*/BEHEER_WACHTWOORD=$BEHEER/" "$DOEL/config.voorbeeld.env" > /etc/colomarkt.env
   chmod 600 /etc/colomarkt.env
   echo "   Toegangscode voor de toestellen: $CODE  (aan te passen in /etc/colomarkt.env)"
+  echo "   Wachtwoord van de systeembeheerder: $BEHEER  (wijzigen kan in de app, bij Beheer)"
 fi
 
 echo "4/5 Dienst starten"

@@ -39,8 +39,16 @@ const ROUTINES = {
 };
 // Sleutel waarmee die taken resultaten (catalogi, bestelstatus) naar deze server terugsturen.
 const SERVER_SLEUTEL = process.env.SERVER_SLEUTEL || '';
+// Wachtwoord van de systeembeheerder (beheersmodule in de app). Kan daarna in de app gewijzigd worden.
+const BEHEER_WACHTWOORD = process.env.BEHEER_WACHTWOORD || '';
+const START_TIJD = Date.now();
 
-if(!TOEGANGSCODE){
+// Instellingen die de systeembeheerder in de app wijzigt. Ze gaan voor op /etc/colomarkt.env.
+const INSTELLINGEN_BESTAND = path.join(DATA_MAP, 'instellingen.json');
+let instellingen = {};
+try{ instellingen = JSON.parse(fs.readFileSync(INSTELLINGEN_BESTAND, 'utf8')); }catch(e){}
+
+if(!TOEGANGSCODE && !instellingen.toegangscodeHash){
   console.error('Stel eerst een TOEGANGSCODE in (zie config.voorbeeld.env).');
   process.exit(1);
 }
@@ -109,9 +117,17 @@ function wijzigingenSinds(versie, toestel){
 }
 
 // ---------- Toegang (één code per school, cookie per toestel) ----------
-const codeHash = crypto.createHash('sha256').update('colomarkt:' + TOEGANGSCODE).digest('hex');
+function hashCode(code){ return crypto.createHash('sha256').update('colomarkt:' + code).digest('hex'); }
+// Een code die de beheerder in de app instelde, gaat voor op TOEGANGSCODE uit /etc/colomarkt.env.
+let codeHash = instellingen.toegangscodeHash || hashCode(TOEGANGSCODE);
 let toegang = {};
 try{ toegang = JSON.parse(fs.readFileSync(TOEGANG_BESTAND, 'utf8')); }catch(e){}
+function bewaarToegang(){ veiligSchrijven(TOEGANG_BESTAND, JSON.stringify(toegang, null, 1)); }
+function bewaarInstellingen(){ veiligSchrijven(INSTELLINGEN_BESTAND, JSON.stringify(instellingen, null, 1)); }
+// Korte, niet-geheime naam voor een toestel (de cookie zelf toont de beheerder nooit).
+function toestelId(token){ return crypto.createHash('sha256').update('toestel:' + token).digest('hex').slice(0, 10); }
+let toegangGewijzigd = false;
+setInterval(() => { if(toegangGewijzigd){ toegangGewijzigd = false; try{ bewaarToegang(); }catch(e){ console.error(e); } } }, 5 * 60 * 1000).unref();
 
 function cookies(req){
   const uit = {};
@@ -123,7 +139,13 @@ function cookies(req){
 }
 function heeftToegang(req){
   const t = cookies(req).cm_toegang;
-  return !!(t && toegang[t] && toegang[t].code === codeHash);
+  const ok = !!(t && toegang[t] && toegang[t].code === codeHash);
+  if(ok){
+    // Laatst gezien, per kwartier bijgehouden (voor het overzicht van de toestellen).
+    const nu = new Date().toISOString();
+    if(!toegang[t].laatst || Date.parse(nu) - Date.parse(toegang[t].laatst) > 15 * 60 * 1000){ toegang[t].laatst = nu; toegangGewijzigd = true; }
+  }
+  return ok;
 }
 const pogingen = new Map(); // ip -> {n, sinds}
 function teVeelPogingen(ip){
@@ -133,6 +155,11 @@ function teVeelPogingen(ip){
   return p.n > 10;
 }
 function isHttps(req){ return req.headers['x-forwarded-proto'] === 'https' || !!req.socket.encrypted; }
+function gelijkeHash(a, b){
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+function klantIp(req){ return req.headers['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',')[0].trim() : req.socket.remoteAddress; }
 
 // ---------- Hulpjes ----------
 function stuur(req, res, status, body, type, extra){
@@ -185,7 +212,7 @@ function appHtml(){
   const st = fs.statSync(vol);
   if(appCache.mtime === st.mtimeMs) return appCache.html;
   let html = fs.readFileSync(vol, 'utf8');
-  const kop = '<script src="/merge.js"></script><script src="/sync.js"></script>'
+  const kop = '<script>window.COLOMARKT_SERVER = true;</script><script src="/merge.js"></script><script src="/sync.js"></script>'
     + '<link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/apple-touch-icon.png">';
   html = html.replace(/<head[^>]*>/i, m => m + '\n' + kop);
   // Link voor "Op je gsm" wijst naar dit adres in plaats van naar claude.ai.
@@ -193,7 +220,9 @@ function appHtml(){
   html = html.replace(/<p class="note">Let op: zolang de serverversie er niet is[\s\S]*?<\/p>/, '<p class="note">Alle toestellen delen dezelfde gegevens via de server.</p>');
   // Gmail werkt enkel binnen claude.ai: verberg de mailknop op de server.
   html = html.split('${email && bonGmail ?').join('${email && bonGmail && bonGmail.gmail !== false ?');
-  html = html.replace('Alle gegevens staan in de browser van dit toestel. Download geregeld een back-up', 'Alle gegevens staan op de server, die elke dag zelf een back-up maakt. Je kan ook zelf een back-up downloaden');
+  // De claude.ai-versie haalt catalogi uit haar eigen opslag; hier staan ze gewoon als bestand op de server.
+  html = html.replace('function catFetch(path){', 'function catFetch(path){ if(window.COLOMARKT_SERVER) return fetch(path);');
+  html = html.replace('Alle gegevens staan in de browser van dit toestel. Download geregeld een back-up','Alle gegevens staan op de server, die elke dag zelf een back-up maakt. Je kan ook zelf een back-up downloaden');
   appCache = {mtime:st.mtimeMs, html};
   return html;
 }
@@ -319,6 +348,216 @@ async function taakRoute(req, res, p){
   return stuur(req, res, 404, {fout:'niet gevonden'}, null, CORS);
 }
 
+// ---------- Beheersmodule (systeembeheerder) ----------
+// Alles onder /api/beheer/ vraagt eerst de gewone toegangscode (cookie) en daarna het beheerwachtwoord.
+const BEHEER_LOG_BESTAND = path.join(DATA_MAP, 'beheer-log.json');
+const BACKUP_NAAM = /^[A-Za-z0-9_-]{1,80}\.json$/;
+const beheerSessies = new Map(); // token -> {tot, toegang}
+const BEHEER_SESSIE_UREN = 12;
+let beheerLog = [];
+try{ beheerLog = JSON.parse(fs.readFileSync(BEHEER_LOG_BESTAND, 'utf8')); }catch(e){}
+
+function nuTekst(){
+  const d = new Date(), tz = {timeZone:'Europe/Brussels'};
+  return d.toLocaleDateString('nl-BE', tz) + ' ' + d.toLocaleTimeString('nl-BE', Object.assign({hour:'2-digit', minute:'2-digit'}, tz));
+}
+function logBeheer(req, tekst){
+  beheerLog.push({tijd:new Date().toISOString(), ip:klantIp(req), toestel:toestelId(cookies(req).cm_toegang || ''), tekst});
+  if(beheerLog.length > 500) beheerLog.splice(0, beheerLog.length - 500);
+  try{ veiligSchrijven(BEHEER_LOG_BESTAND, JSON.stringify(beheerLog, null, 1)); }catch(e){ console.error(e); }
+  console.log('Beheer:', tekst);
+}
+function wachtwoordHash(pw){
+  const zout = crypto.randomBytes(16).toString('hex');
+  return 'scrypt$' + zout + '$' + crypto.scryptSync(pw, zout, 32).toString('hex');
+}
+function wachtwoordKlopt(pw){
+  pw = String(pw || '');
+  if(instellingen.beheerHash){
+    const [, zout, hash] = instellingen.beheerHash.split('$');
+    return gelijkeHash(crypto.scryptSync(pw, zout, 32).toString('hex'), hash);
+  }
+  if(!BEHEER_WACHTWOORD) return false;
+  return gelijkeHash(hashCode(pw), hashCode(BEHEER_WACHTWOORD));
+}
+function beheerIngesteld(){ return !!(instellingen.beheerHash || BEHEER_WACHTWOORD); }
+function beheerSessie(req){
+  const c = cookies(req), s = c.cm_beheer && beheerSessies.get(c.cm_beheer);
+  if(!s) return null;
+  if(s.tot < Date.now() || s.toegang !== c.cm_toegang){ beheerSessies.delete(c.cm_beheer); return null; }
+  return s;
+}
+function beheerCookie(req, token, maxAge){
+  return `cm_beheer=${token}; Path=/api/beheer/; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${isHttps(req) ? '; Secure' : ''}`;
+}
+function backupLijst(){
+  const map = path.join(DATA_MAP, 'backups');
+  return fs.readdirSync(map).filter(f => BACKUP_NAAM.test(f)).map(f => {
+    const st = fs.statSync(path.join(map, f));
+    const soort = f.startsWith('state-') ? 'dagelijks' : f.startsWith('voor-update-') ? 'voor update' : f.startsWith('voor-terugzetten-') ? 'voor terugzetten' : 'handmatig';
+    return {bestand:f, soort, grootte:st.size, datum:st.mtime.toISOString()};
+  }).sort((a, b) => b.datum.localeCompare(a.datum));
+}
+function stempel(){ // lokale tijd, bv. 2026-10-22_1125
+  return new Intl.DateTimeFormat('sv-SE', {timeZone:'Europe/Brussels', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'}).format(new Date()).replace(' ', '_').replace(':', '');
+}
+// Leest een back-up: het serverformaat {versie, data} of een download uit de app {app, state}.
+function leesBackupInhoud(tekst){
+  const j = JSON.parse(tekst);
+  let data = j && j.data !== undefined && j.versie !== undefined ? j.data : (j && j.state) || null;
+  if(!data || !Array.isArray(data.users) || !Array.isArray(data.products)) throw new Error('Dit bestand is geen back-up van Colomarkt+.');
+  data = Object.assign({}, data); for(const k of LOKALE_SLEUTELS) delete data[k];
+  return data;
+}
+
+async function beheerRoute(req, res, p, url){
+  const post = req.method === 'POST';
+  // Enkel JSON-aanvragen van de app zelf (beschermt tegen formulieren van andere sites).
+  if(post && !/^application\/json/i.test(req.headers['content-type'] || '')) return stuur(req, res, 415, {fout:'Verkeerd formaat'});
+  const eigenToestel = cookies(req).cm_toegang;
+
+  if(p === '/api/beheer/status' && req.method === 'GET')
+    return stuur(req, res, 200, {ingesteld:beheerIngesteld(), aangemeld:!!beheerSessie(req)});
+
+  if(p === '/api/beheer/aanmelden' && post){
+    const ip = 'beheer:' + klantIp(req);
+    if(teVeelPogingen(ip)) return stuur(req, res, 429, {fout:'Te veel pogingen. Probeer het over een kwartier opnieuw.'});
+    if(!beheerIngesteld()) return stuur(req, res, 503, {fout:'Er is nog geen beheerwachtwoord ingesteld. Zet BEHEER_WACHTWOORD in /etc/colomarkt.env en herstart de dienst.'});
+    const body = await leesBody(req, 10000);
+    if(!wachtwoordKlopt(body.wachtwoord)){ await new Promise(r => setTimeout(r, 600)); return stuur(req, res, 403, {fout:'Verkeerd wachtwoord.'}); }
+    pogingen.delete(ip);
+    const token = crypto.randomBytes(24).toString('hex');
+    beheerSessies.set(token, {tot:Date.now() + BEHEER_SESSIE_UREN * 3600 * 1000, toegang:eigenToestel});
+    logBeheer(req, 'Aangemeld als systeembeheerder.');
+    return stuur(req, res, 200, {ok:true}, null, {'Set-Cookie':beheerCookie(req, token, BEHEER_SESSIE_UREN * 3600)});
+  }
+  if(p === '/api/beheer/afmelden' && post){
+    const c = cookies(req); if(c.cm_beheer) beheerSessies.delete(c.cm_beheer);
+    return stuur(req, res, 200, {ok:true}, null, {'Set-Cookie':beheerCookie(req, '', 0)});
+  }
+
+  if(!beheerSessie(req)) return stuur(req, res, 401, {fout:'Meld je opnieuw aan als systeembeheerder.', code:'beheer'});
+
+  if(p === '/api/beheer/info' && req.method === 'GET'){
+    let grootte = 0; try{ grootte = fs.statSync(STATE_BESTAND).size; }catch(e){}
+    let appDatum = ''; try{ appDatum = fs.statSync(path.join(APP_MAP, 'index.html')).mtime.toISOString(); }catch(e){}
+    return stuur(req, res, 200, {
+      versie:db.versie, gestart:new Date(START_TIJD).toISOString(), node:process.version, appDatum,
+      dataGrootte:grootte, dataMap:DATA_MAP, backupDagen:BACKUP_DAGEN, backups:backupLijst().length,
+      toestellen:Object.values(toegang).filter(t => t.code === codeHash).length,
+      ai:!!ANTHROPIC_API_KEY, aiModel:AI_MODEL, aiModelSnel:AI_MODEL_SNEL,
+      routines:{webshop:!!ROUTINES.webshop.token, bestelstatus:!!ROUTINES.bestelstatus.token, prijzen:!!ROUTINES.prijzen.token},
+      serverSleutel:!!SERVER_SLEUTEL,
+      codeBron:instellingen.toegangscodeHash ? 'app' : 'config', wachtwoordBron:instellingen.beheerHash ? 'app' : 'config'
+    });
+  }
+  if(p === '/api/beheer/logboek' && req.method === 'GET') return stuur(req, res, 200, {log:beheerLog.slice(-200).reverse()});
+
+  // --- Toestellen en toegangscode ---
+  if(p === '/api/beheer/toestellen' && req.method === 'GET'){
+    const lijst = Object.entries(toegang).filter(([, t]) => t.code === codeHash).map(([token, t]) => ({
+      id:toestelId(token), naam:t.naam || '', toestel:t.toestel || '', sinds:t.sinds || '', laatst:t.laatst || '', ditToestel:token === eigenToestel
+    })).sort((a, b) => (b.laatst || '').localeCompare(a.laatst || ''));
+    return stuur(req, res, 200, {toestellen:lijst});
+  }
+  if(p === '/api/beheer/toestel' && post){
+    const body = await leesBody(req, 10000);
+    const token = Object.keys(toegang).find(t => toestelId(t) === String(body.id || ''));
+    if(!token) return stuur(req, res, 404, {fout:'Toestel niet gevonden.'});
+    if(body.actie === 'naam'){
+      toegang[token].naam = String(body.naam || '').trim().slice(0, 60); bewaarToegang();
+      return stuur(req, res, 200, {ok:true});
+    }
+    if(body.actie === 'intrekken'){
+      if(token === eigenToestel) return stuur(req, res, 400, {fout:'Je kan de toegang van dit toestel niet intrekken.'});
+      const naam = toegang[token].naam || toestelId(token);
+      delete toegang[token]; bewaarToegang();
+      logBeheer(req, `Toegang ingetrokken voor toestel ${naam}.`);
+      return stuur(req, res, 200, {ok:true});
+    }
+    return stuur(req, res, 400, {fout:'Onbekende actie.'});
+  }
+  if(p === '/api/beheer/toestellen-afmelden' && post){
+    let n = 0;
+    for(const t of Object.keys(toegang)) if(t !== eigenToestel){ delete toegang[t]; n++; }
+    bewaarToegang();
+    logBeheer(req, `Alle andere toestellen afgemeld (${n}).`);
+    return stuur(req, res, 200, {afgemeld:n});
+  }
+  if(p === '/api/beheer/toegangscode' && post){
+    const body = await leesBody(req, 10000);
+    const code = String(body.code || '').trim();
+    if(code.length < 8) return stuur(req, res, 400, {fout:'Kies een toegangscode van minstens 8 tekens.'});
+    codeHash = hashCode(code);
+    instellingen.toegangscodeHash = codeHash; bewaarInstellingen();
+    // Dit toestel blijft binnen; alle andere toestellen moeten de nieuwe code ingeven.
+    let n = 0;
+    for(const t of Object.keys(toegang)){ if(t === eigenToestel) toegang[t].code = codeHash; else { delete toegang[t]; n++; } }
+    bewaarToegang();
+    logBeheer(req, `Toegangscode gewijzigd; ${n} andere toestellen moeten de nieuwe code ingeven.`);
+    return stuur(req, res, 200, {ok:true, afgemeld:n});
+  }
+  if(p === '/api/beheer/wachtwoord' && post){
+    const body = await leesBody(req, 10000);
+    if(!wachtwoordKlopt(body.huidig)) return stuur(req, res, 403, {fout:'Het huidige wachtwoord klopt niet.'});
+    const nieuw = String(body.nieuw || '');
+    if(nieuw.length < 10) return stuur(req, res, 400, {fout:'Kies een wachtwoord van minstens 10 tekens.'});
+    instellingen.beheerHash = wachtwoordHash(nieuw); bewaarInstellingen();
+    // Andere beheersessies stoppen; deze blijft.
+    const eigen = cookies(req).cm_beheer;
+    for(const t of [...beheerSessies.keys()]) if(t !== eigen) beheerSessies.delete(t);
+    logBeheer(req, 'Beheerwachtwoord gewijzigd.');
+    return stuur(req, res, 200, {ok:true});
+  }
+
+  // --- Back-ups op de server ---
+  if(p === '/api/beheer/backups' && req.method === 'GET') return stuur(req, res, 200, {backups:backupLijst(), dagen:BACKUP_DAGEN});
+  if(p === '/api/beheer/backup' && req.method === 'GET'){
+    const naam = url.searchParams.get('bestand') || '';
+    let vol, downloadNaam = naam;
+    if(naam === 'huidig'){ bewaarNu(); vol = STATE_BESTAND; downloadNaam = `colomarkt-server_${stempel()}.json`; }
+    else if(BACKUP_NAAM.test(naam)) vol = path.join(DATA_MAP, 'backups', naam);
+    if(!vol || !fs.existsSync(vol)) return stuur(req, res, 404, {fout:'Back-up niet gevonden.'});
+    logBeheer(req, `Back-up gedownload: ${downloadNaam}.`);
+    return stuur(req, res, 200, fs.readFileSync(vol), 'application/json; charset=utf-8', {'Content-Disposition':`attachment; filename="${downloadNaam}"`});
+  }
+  if(p === '/api/beheer/backup-maken' && post){
+    bewaarNu();
+    const naam = `handmatig-${stempel()}.json`;
+    fs.copyFileSync(STATE_BESTAND, path.join(DATA_MAP, 'backups', naam));
+    logBeheer(req, `Back-up gemaakt: ${naam}.`);
+    return stuur(req, res, 200, {bestand:naam});
+  }
+  if(p === '/api/beheer/backup-terugzetten' && post){
+    const body = await leesBody(req, 60 * 1024 * 1024);
+    let data, bron;
+    try{
+      if(body.bestand){
+        if(!BACKUP_NAAM.test(body.bestand)) throw new Error('Ongeldige bestandsnaam.');
+        data = leesBackupInhoud(fs.readFileSync(path.join(DATA_MAP, 'backups', body.bestand), 'utf8'));
+        bron = body.bestand;
+      } else if(body.inhoud){
+        data = leesBackupInhoud(typeof body.inhoud === 'string' ? body.inhoud : JSON.stringify(body.inhoud));
+        bron = 'een geüpload bestand';
+      } else throw new Error('Geen back-up gekozen.');
+    }catch(e){ return stuur(req, res, 400, {fout:e.code === 'ENOENT' ? 'Back-up niet gevonden.' : e.message}); }
+    // Eerst een vangnet van de huidige gegevens.
+    bewaarNu();
+    const vangnet = `voor-terugzetten-${stempel()}.json`;
+    try{ fs.copyFileSync(STATE_BESTAND, path.join(DATA_MAP, 'backups', vangnet)); }catch(e){}
+    if(!Array.isArray(data.activity)) data.activity = [];
+    data.activity.push({tijd:nuTekst(), tekst:`Back-up teruggezet door de systeembeheerder (${bron}).`});
+    // Een hogere versie en een leeg logboek: elk toestel haalt meteen de volledige gegevens opnieuw op.
+    db = {versie:db.versie + 1, data};
+    log = [];
+    bewaarNu();
+    logBeheer(req, `Back-up teruggezet: ${bron}. Vangnet: ${vangnet}.`);
+    return stuur(req, res, 200, {ok:true, vangnet, versie:db.versie});
+  }
+
+  return stuur(req, res, 404, {fout:'niet gevonden'});
+}
+
 // ---------- Routes ----------
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -336,12 +575,10 @@ const server = http.createServer(async (req, res) => {
       if(teVeelPogingen(ip)) return stuur(req, res, 429, toegangPagina('Te veel pogingen. Probeer het over een kwartier opnieuw.'), 'text/html; charset=utf-8');
       const ruw = await new Promise(ok => { let s = ''; req.on('data', d => { s += d; if(s.length > 2000) req.destroy(); }); req.on('end', () => ok(s)); });
       const code = new URLSearchParams(ruw).get('code') || '';
-      const a = Buffer.from(crypto.createHash('sha256').update(code).digest('hex'));
-      const b = Buffer.from(crypto.createHash('sha256').update(TOEGANGSCODE).digest('hex'));
-      if(!crypto.timingSafeEqual(a, b)) return stuur(req, res, 401, toegangPagina('Deze code klopt niet.'), 'text/html; charset=utf-8');
+      if(!gelijkeHash(hashCode(code), codeHash)) return stuur(req, res, 401, toegangPagina('Deze code klopt niet.'), 'text/html; charset=utf-8');
       const token = crypto.randomBytes(24).toString('hex');
-      toegang[token] = {code:codeHash, sinds:new Date().toISOString(), toestel:String(req.headers['user-agent'] || '').slice(0, 120)};
-      veiligSchrijven(TOEGANG_BESTAND, JSON.stringify(toegang, null, 1));
+      toegang[token] = {code:codeHash, sinds:new Date().toISOString(), laatst:new Date().toISOString(), toestel:String(req.headers['user-agent'] || '').slice(0, 120)};
+      bewaarToegang();
       pogingen.delete(ip);
       const cookie = `cm_toegang=${token}; Path=/; Max-Age=${400 * 24 * 3600}; HttpOnly; SameSite=Lax${isHttps(req) ? '; Secure' : ''}`;
       res.writeHead(303, {'Location':'/', 'Set-Cookie':cookie});
@@ -352,6 +589,8 @@ const server = http.createServer(async (req, res) => {
       if(p.startsWith('/api/')) return stuur(req, res, 401, {fout:'geen toegang'});
       return stuur(req, res, 200, toegangPagina(''), 'text/html; charset=utf-8');
     }
+
+    if(p.startsWith('/api/beheer/')) return await beheerRoute(req, res, p, url);
 
     if(p === '/' || p === '/index.html') return stuur(req, res, 200, appHtml(), 'text/html; charset=utf-8');
     if(p === '/merge.js') return bestand(req, res, path.join(__dirname, 'lib', 'merge.js'));
